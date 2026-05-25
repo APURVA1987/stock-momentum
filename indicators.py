@@ -83,3 +83,66 @@ def pct_change_over(series: pd.Series, lookback: int = 20) -> float:
     if past == 0:
         return np.nan
     return (latest / past - 1.0) * 100.0
+
+
+# -----------------------------------------------------------------------------
+# The functions below are calculated MANUALLY (no 'ta'/'pandas-ta' library) so
+# the app never has dependency/install problems. They use Wilder's smoothing,
+# which is the industry-standard way to average ATR/ADX.
+# -----------------------------------------------------------------------------
+def true_range(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+    """True Range = the biggest of:
+      (today's high - today's low),
+      |today's high - yesterday's close|,
+      |today's low  - yesterday's close|.
+    It measures how much a stock moved in a day, including gaps.
+    """
+    prev_close = close.shift(1)
+    ranges = pd.concat(
+        [(high - low), (high - prev_close).abs(), (low - prev_close).abs()],
+        axis=1,
+    )
+    return ranges.max(axis=1)
+
+
+def atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
+    """Average True Range (ATR) = average volatility over `period` days.
+    We use it to size a sensible, volatility-aware stop loss.
+    """
+    tr = true_range(high, low, close)
+    return tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+
+
+def adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
+    """Average Directional Index (ADX) = trend STRENGTH (not direction).
+    ADX > 20 = a real trend is present; ADX > 25 = strong trend.
+    Calculated manually using the standard +DI / -DI / DX method.
+    """
+    up_move = high.diff()
+    down_move = -low.diff()
+
+    # Positive directional movement when up_move dominates, else 0.
+    plus_dm = ((up_move > down_move) & (up_move > 0)) * up_move
+    minus_dm = ((down_move > up_move) & (down_move > 0)) * down_move
+
+    tr = true_range(high, low, close)
+    atr_ = tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+
+    plus_di = 100 * (plus_dm.ewm(alpha=1 / period, min_periods=period, adjust=False).mean() / atr_)
+    minus_di = 100 * (minus_dm.ewm(alpha=1 / period, min_periods=period, adjust=False).mean() / atr_)
+
+    denom = (plus_di + minus_di).replace(0, np.nan)
+    dx = 100 * (plus_di - minus_di).abs() / denom
+    return dx.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+
+
+def close_position(open_=None, high=None, low=None, close=None) -> float:
+    """Candle close strength for the LATEST candle (single values, not series):
+        (Close - Low) / (High - Low)
+    Above 0.75 = closed strongly near the day's high (bullish).
+    Below 0.50 = weak close. Returns 0.5 if the candle has no range.
+    """
+    rng = (high - low)
+    if rng is None or rng == 0:
+        return 0.5
+    return float((close - low) / rng)

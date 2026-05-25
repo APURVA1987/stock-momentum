@@ -61,12 +61,12 @@ To stop it, go back to the terminal and press **Ctrl + C**.
 2. (Optional) Upload your own `universe.csv` from the sidebar.
    If you don't upload one, the default `universe.csv` in this folder is used.
 3. Click **Run Scan**. A progress bar shows scanning status.
-4. Review results in the tabs:
-   - **Ranked Results** – scored & colour-coded table
-   - **Stock Chart** – candlestick + 20/50/200 DMA + volume + RSI
-   - **Rejected** – stocks that failed, with the reason
-   - **Claude Review** – an auto-generated prompt to paste into Claude/ChatGPT
-   - **Export** – save Excel + CSV into the `outputs/` folder
+4. Read the **summary cards** at the top: Total Scanned, Strong Breakout,
+   Wait for Confirmation, Early Watchlist, Rejected, Market Regime,
+   Top 3 Sectors, Failed Tickers.
+5. Review results in the tabs (explained in section 7 below):
+   **Strong Breakout · Wait for Confirmation · Early Watchlist · Rejected ·
+   Stock Chart · Sector Strength · Claude Review · Export**.
 
 ---
 
@@ -94,29 +94,79 @@ press **C** in the dashboard, or restart with `streamlit run app.py`.
 
 ---
 
-## 6. Output files
+## 6. Output files (Export tab)
 
-After clicking **Save Excel + CSV** in the Export tab, you get:
+Click **Save Excel + CSVs to outputs/ folder** in the Export tab to create:
 
-- `outputs/scanner_output.xlsx` with sheets:
-  `Scanner_Output`, `Raw_Summary`, `Rejected`, `Failed_Tickers`, `Claude_Review`
-- `outputs/scanner_output.csv`
+- `outputs/scanner_output.xlsx` with 7 sheets:
+  `Strong_Breakout`, `Wait_For_Confirmation`, `Early_Watchlist`, `Rejected`,
+  `Sector_Strength`, `Market_Regime`, `Claude_Review`
+- `outputs/strong_breakout.csv`
+- `outputs/wait_for_confirmation.csv`
+- `outputs/early_watchlist.csv`
 - `outputs/rejected_stocks.csv`
+
+> On Streamlit Cloud the `outputs/` folder is temporary (wiped on restart).
+> Use the **Download** buttons in the Export tab to save files to your computer.
 
 ---
 
-## 7. The strategy in plain words
+## 7. What each tab means
 
-A stock qualifies when **most** of these are true:
+| Tab | What it shows |
+|-----|---------------|
+| **Strong Breakout** | Score >= 80 and all entry conditions met. The most "actionable" list. |
+| **Wait for Confirmation** | Score 65-79. The setup is developing but the breakout is **not confirmed yet**. Each row tells you exactly *what to wait for* and at *what price*. |
+| **Early Watchlist** | Score 55-64. Momentum is building but not ready. Keep on radar. |
+| **Rejected** | Failed a hard rule (below 200 DMA, falling 200 DMA, no retest, negative relative strength, weak volume) or scored below the minimum. |
+| **Stock Chart** | Candlestick + 20/50/200 DMA + 52W-high + trigger + invalidation lines, plus Volume, RSI and ADX panels. Shows a green/yellow box per classification. |
+| **Sector Strength** | Average 20-day return per sector. Top sectors get a small score bonus. |
+| **Claude Review** | Two ready-to-paste prompts (Strong + Wait) for a deeper AI review. |
+| **Export** | Save the Excel workbook + CSV files. |
 
-- **Trend:** Close > 200 DMA, 50 DMA > 200 DMA, 200 DMA rising over 30 days.
-- **Pullback:** in the last ~60 days the low came within ~3-7% of the 200 DMA,
-  and the stock did **not** spend too long (>10 days) below the 200 DMA.
-- **Recovery:** Close > 20 DMA and > 50 DMA, RSI(14) > 55, volume picking up.
-- **Breakout:** within 5% of the 52-week high (or above the previous high),
-  and stronger than the Nifty over the last 20 days.
+### What is "Wait for Confirmation"?
+These are good-but-not-yet-ready stocks. They have recovered above the 200 DMA
+and are climbing, but haven't *confirmed* a breakout (e.g. RSI still under 60,
+volume not yet 1.5x, or price still below the 52-week high). The
+**Confirmation Needed** column states the missing condition in plain English.
 
-Each stock is scored out of 100 and tagged Low / Medium / High risk.
+### How to use the Trigger Price
+- **Trigger Price** = the level the stock must close above for the setup to confirm
+  (the 52-week high, the latest high, or the 50 DMA depending on where price is).
+- **Suggested Alert Price** = 1% below the trigger — set your price alert here so
+  you get warned *before* the breakout.
+- **Invalidation Level** = if price falls below this, the setup is broken (it is the
+  swing low / 50 DMA / 200 DMA depending on risk). Do **not** hold below it.
+
+### How to read the Score (out of 100)
+Five transparent buckets (shown component-wise in the Stock Chart detailed view):
+- **Trend Quality – 25** (above 200 DMA, 50>200, 200 rising, above 20 & 50 DMA)
+- **Pullback Quality – 20** (retested 200 DMA, few days below it, dry-up volume, clean recovery)
+- **Momentum Quality – 20** (RSI>60, ADX>20, relative strength positive, beating Nifty)
+- **Breakout Quality – 20** (near/above 52W high, volume>1.5x, strong candle close)
+- **Risk Quality – 15** (not overextended from 20/200 DMA, risk-reward >=1.5, market supportive)
+
+A small +2 bonus is added for stocks in a top-3 sector (capped at 100).
+
+### Market Regime
+Based on the Nifty 50 (close vs 50/200 DMA and 20-day return) the app shows
+**Bullish / Neutral / Weak**. In a **Weak** regime, rows are marked
+"Trade with caution" and the market-supportive score point is withheld.
+
+---
+
+## 8. The strategy in plain words
+
+A stock scores highly when **most** of these are true:
+
+- **Trend:** Close > 200 DMA, 50 DMA > 200 DMA, 200 DMA rising.
+- **Pullback:** the low recently came near the 200 DMA on *lower* volume, and
+  the stock did not spend long below the 200 DMA.
+- **Recovery:** Close back above 20 & 50 DMA, RSI strengthening, ADX confirming trend.
+- **Breakout:** near/above the 52-week high on *expanding* volume, with a strong
+  candle close and positive relative strength vs the Nifty.
+
+The classification then sorts these into Strong / Wait / Watchlist / Rejected.
 
 ---
 
