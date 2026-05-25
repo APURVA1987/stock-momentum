@@ -1,0 +1,36 @@
+symbol,company,sector,market_cap_category
+RELIANCE,Reliance Industries,Energy,Large Cap
+TCS,Tata Consultancy Services,IT,Large Cap
+INFY,Infosys,IT,Large Cap
+HDFCBANK,HDFC Bank,Banking,Large Cap
+ICICIBANK,ICICI Bank,Banking,Large Cap
+SBIN,State Bank of India,Banking,Large Cap
+BHARTIARTL,Bharti Airtel,Telecom,Large Cap
+ITC,ITC,FMCG,Large Cap
+LT,Larsen & Toubro,Infrastructure,Large Cap
+KOTAKBANK,Kotak Mahindra Bank,Banking,Large Cap
+AXISBANK,Axis Bank,Banking,Large Cap
+HINDUNILVR,Hindustan Unilever,FMCG,Large Cap
+BAJFINANCE,Bajaj Finance,NBFC,Large Cap
+MARUTI,Maruti Suzuki,Auto,Large Cap
+SUNPHARMA,Sun Pharma,Pharma,Large Cap
+TITAN,Titan Company,Consumer Durables,Large Cap
+ULTRACEMCO,UltraTech Cement,Cement,Large Cap
+ASIANPAINT,Asian Paints,Paints,Large Cap
+NTPC,NTPC,Power,Large Cap
+POWERGRID,Power Grid Corp,Power,Large Cap
+DIXON,Dixon Technologies,EMS,Mid Cap
+PERSISTENT,Persistent Systems,IT,Mid Cap
+CUMMINSIND,Cummins India,Capital Goods,Mid Cap
+POLYCAB,Polycab India,Cables,Mid Cap
+TVSMOTOR,TVS Motor,Auto,Mid Cap
+INDHOTEL,Indian Hotels,Hospitality,Mid Cap
+MPHASIS,Mphasis,IT,Mid Cap
+COFORGE,Coforge,IT,Mid Cap
+ASTRAL,Astral,Pipes,Mid Cap
+SUPREMEIND,Supreme Industries,Plastics,Mid Cap
+PAGEIND,Page Industries,Textiles,Mid Cap
+BHARATFORG,Bharat Forge,Auto Ancillary,Mid Cap
+ABCAPITAL,Aditya Birla Capital,NBFC,Mid Cap
+FEDERALBNK,Federal Bank,Banking,Mid Cap
+LAURUSLABS,Laurus Labs,Pharma,Mid Cap

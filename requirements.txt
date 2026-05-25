@@ -1,0 +1,9 @@
+# Python packages needed for this dashboard.
+# Install all of them with:   pip install -r requirements.txt
+streamlit
+pandas
+numpy
+yfinance
+plotly
+openpyxl
+tqdm
