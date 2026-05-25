@@ -22,7 +22,8 @@ POWERGRID,Power Grid Corp,Power,Large Cap
 NESTLEIND,Nestle India,FMCG,Large Cap
 WIPRO,Wipro,IT,Large Cap
 M&M,Mahindra & Mahindra,Auto,Large Cap
-TATAMOTORS,Tata Motors,Auto,Large Cap
+TMCV,Tata Motors (Commercial Vehicles),Auto,Large Cap
+TMPV,Tata Motors Passenger Vehicles,Auto,Large Cap
 ADANIENT,Adani Enterprises,Diversified,Large Cap
 ADANIPORTS,Adani Ports,Infrastructure,Large Cap
 ONGC,Oil & Natural Gas Corp,Energy,Large Cap
@@ -46,7 +47,6 @@ SBILIFE,SBI Life Insurance,Insurance,Large Cap
 HDFCLIFE,HDFC Life Insurance,Insurance,Large Cap
 BPCL,Bharat Petroleum,Energy,Large Cap
 TATACONSUM,Tata Consumer Products,FMCG,Large Cap
-LTIM,LTIMindtree,IT,Large Cap
 SHRIRAMFIN,Shriram Finance,NBFC,Large Cap
 DMART,Avenue Supermarts,Retail,Large Cap
 PIDILITIND,Pidilite Industries,Chemicals,Large Cap
@@ -135,7 +135,7 @@ LODHA,Macrotech Developers,Realty,Mid Cap
 LICHSGFIN,LIC Housing Finance,NBFC,Mid Cap
 MANAPPURAM,Manappuram Finance,NBFC,Mid Cap
 M&MFIN,Mahindra & Mahindra Financial,NBFC,Mid Cap
-PEL,Piramal Enterprises,NBFC,Mid Cap
+PIRAMALFIN,Piramal Finance,NBFC,Mid Cap
 CONCOR,Container Corp of India,Logistics,Mid Cap
 PETRONET,Petronet LNG,Energy,Mid Cap
 IGL,Indraprastha Gas,Energy,Mid Cap
@@ -213,3 +213,47 @@ BRIGADE,Brigade Enterprises,Realty,Mid Cap
 SOBHA,Sobha,Realty,Mid Cap
 KALYANKJIL,Kalyan Jewellers,Retail,Mid Cap
 ABFRL,Aditya Birla Fashion & Retail,Retail,Mid Cap
+SOLARINDS,Solar Industries,Defence,Mid Cap
+CGPOWER,CG Power & Industrial Solutions,Capital Goods,Mid Cap
+APARINDS,Apar Industries,Capital Goods,Mid Cap
+TRITURBINE,Triveni Turbine,Capital Goods,Mid Cap
+ELGIEQUIP,Elgi Equipments,Capital Goods,Mid Cap
+GRINDWELL,Grindwell Norton,Capital Goods,Mid Cap
+CARBORUNIV,Carborundum Universal,Capital Goods,Mid Cap
+SKFINDIA,SKF India,Capital Goods,Mid Cap
+TIMKEN,Timken India,Capital Goods,Mid Cap
+SCHAEFFLER,Schaeffler India,Auto Ancillary,Mid Cap
+KAYNES,Kaynes Technology,EMS,Mid Cap
+SYRMA,Syrma SGS Technology,EMS,Mid Cap
+AMBER,Amber Enterprises,EMS,Mid Cap
+GRSE,Garden Reach Shipbuilders,Defence,Mid Cap
+ZENTEC,Zen Technologies,Defence,Mid Cap
+PFIZER,Pfizer,Pharma,Mid Cap
+SANOFI,Sanofi India,Pharma,Mid Cap
+GLAXO,GlaxoSmithKline Pharma,Pharma,Mid Cap
+CAPLIPOINT,Caplin Point Laboratories,Pharma,Mid Cap
+NEULANDLAB,Neuland Laboratories,Pharma,Mid Cap
+VINATIORGA,Vinati Organics,Chemicals,Mid Cap
+FINEORG,Fine Organic Industries,Chemicals,Mid Cap
+CLEAN,Clean Science & Technology,Chemicals,Mid Cap
+ALKYLAMINE,Alkyl Amines Chemicals,Chemicals,Mid Cap
+BALAMINES,Balaji Amines,Chemicals,Mid Cap
+NOCIL,NOCIL,Chemicals,Mid Cap
+TANLA,Tanla Platforms,IT,Mid Cap
+MASTEK,Mastek,IT,Mid Cap
+INTELLECT,Intellect Design Arena,IT,Mid Cap
+SONATSOFTW,Sonata Software,IT,Mid Cap
+ZENSARTECH,Zensar Technologies,IT,Mid Cap
+FSL,Firstsource Solutions,IT,Mid Cap
+TATATECH,Tata Technologies,IT,Mid Cap
+RELAXO,Relaxo Footwears,Consumer Durables,Mid Cap
+BATAINDIA,Bata India,Consumer Durables,Mid Cap
+METROBRAND,Metro Brands,Retail,Mid Cap
+VMART,V-Mart Retail,Retail,Mid Cap
+WESTLIFE,Westlife Foodworld,QSR,Mid Cap
+PATANJALI,Patanjali Foods,FMCG,Mid Cap
+AWL,AWL Agri Business,FMCG,Mid Cap
+SBICARD,SBI Cards & Payment Services,NBFC,Mid Cap
+MOTILALOFS,Motilal Oswal Financial,Capital Markets,Mid Cap
+PHOENIXLTD,Phoenix Mills,Realty,Mid Cap
+TITAGARH,Titagarh Rail Systems,Capital Goods,Mid Cap

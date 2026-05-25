@@ -15,6 +15,7 @@
 # -----------------------------------------------------------------------------
 
 import datetime as dt
+import time
 
 import numpy as np
 import pandas as pd
@@ -31,24 +32,35 @@ NIFTY_SYMBOL = "^NSEI"
 # -----------------------------------------------------------------------------
 # 1. DATA DOWNLOAD
 # -----------------------------------------------------------------------------
-def download_history(symbol_ns: str, period: str = "5y") -> pd.DataFrame:
+def download_history(symbol_ns: str, period: str = "5y", retries: int = 2) -> pd.DataFrame:
     """Download daily OHLCV data for one NSE symbol (already ending in '.NS').
 
     `period` can be '2y', '3y', '5y'.
+    `retries` = how many extra attempts to make if the download comes back empty
+    (this fights temporary Yahoo Finance rate-limits on shared cloud servers).
     Returns a clean DataFrame with columns: Open, High, Low, Close, Volume.
-    Returns an EMPTY DataFrame if the download fails (so the app never crashes).
+    Returns an EMPTY DataFrame if the download still fails (so the app never crashes).
     """
-    try:
-        df = yf.download(
-            symbol_ns,
-            period=period,
-            interval="1d",
-            auto_adjust=True,   # adjust for splits/dividends
-            progress=False,
-            threads=False,
-        )
-    except Exception:
-        return pd.DataFrame()
+    df = None
+    for attempt in range(retries + 1):
+        try:
+            df = yf.download(
+                symbol_ns,
+                period=period,
+                interval="1d",
+                auto_adjust=True,   # adjust for splits/dividends
+                progress=False,
+                threads=False,
+            )
+        except Exception:
+            df = None
+
+        # If we got data, stop retrying.
+        if df is not None and not df.empty:
+            break
+        # Otherwise wait a moment and try again (helps with rate-limits).
+        if attempt < retries:
+            time.sleep(1.5)
 
     if df is None or df.empty:
         return pd.DataFrame()
