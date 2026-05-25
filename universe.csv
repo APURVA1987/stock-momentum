@@ -90,7 +90,7 @@ PFC,Power Finance Corp,NBFC,Large Cap
 RECLTD,REC,NBFC,Large Cap
 LICI,Life Insurance Corp,Insurance,Large Cap
 IRFC,Indian Railway Finance Corp,NBFC,Large Cap
-ZOMATO,Zomato,Internet,Large Cap
+ETERNAL,Eternal (formerly Zomato),Internet,Large Cap
 BOSCHLTD,Bosch,Auto Ancillary,Large Cap
 DIXON,Dixon Technologies,EMS,Mid Cap
 PERSISTENT,Persistent Systems,IT,Mid Cap
@@ -156,3 +156,60 @@ OFSS,Oracle Financial Services,IT,Mid Cap
 CYIENT,Cyient,IT,Mid Cap
 BSOFT,Birlasoft,IT,Mid Cap
 JSWENERGY,JSW Energy,Power,Mid Cap
+LTTS,L&T Technology Services,IT,Mid Cap
+MANKIND,Mankind Pharma,Pharma,Mid Cap
+GLAND,Gland Pharma,Pharma,Mid Cap
+AJANTPHARM,Ajanta Pharma,Pharma,Mid Cap
+JBCHEPHARM,JB Chemicals,Pharma,Mid Cap
+ABBOTINDIA,Abbott India,Pharma,Mid Cap
+NATCOPHARM,Natco Pharma,Pharma,Mid Cap
+ERIS,Eris Lifesciences,Pharma,Mid Cap
+GRANULES,Granules India,Pharma,Mid Cap
+ENDURANCE,Endurance Technologies,Auto Ancillary,Mid Cap
+UNOMINDA,UNO Minda,Auto Ancillary,Mid Cap
+SUNDRMFAST,Sundram Fasteners,Auto Ancillary,Mid Cap
+CEATLTD,CEAT,Auto Ancillary,Mid Cap
+THERMAX,Thermax,Capital Goods,Mid Cap
+BHEL,Bharat Heavy Electricals,Capital Goods,Mid Cap
+KEC,KEC International,Capital Goods,Mid Cap
+NCC,NCC,Infrastructure,Mid Cap
+IRB,IRB Infrastructure,Infrastructure,Mid Cap
+RITES,RITES,Infrastructure,Mid Cap
+IRCON,Ircon International,Infrastructure,Mid Cap
+BDL,Bharat Dynamics,Defence,Mid Cap
+COCHINSHIP,Cochin Shipyard,Defence,Mid Cap
+DATAPATTNS,Data Patterns,Defence,Mid Cap
+SRF,SRF,Chemicals,Mid Cap
+DEEPAKNTR,Deepak Nitrite,Chemicals,Mid Cap
+AARTIIND,Aarti Industries,Chemicals,Mid Cap
+NAVINFLUOR,Navin Fluorine,Chemicals,Mid Cap
+PIIND,PI Industries,Chemicals,Mid Cap
+ATUL,Atul,Chemicals,Mid Cap
+TATACHEM,Tata Chemicals,Chemicals,Mid Cap
+RADICO,Radico Khaitan,FMCG,Mid Cap
+EMAMILTD,Emami,FMCG,Mid Cap
+HONASA,Honasa Consumer,FMCG,Mid Cap
+RBLBANK,RBL Bank,Banking,Mid Cap
+INDIANB,Indian Bank,Banking,Mid Cap
+UNIONBANK,Union Bank of India,Banking,Mid Cap
+CUB,City Union Bank,Banking,Mid Cap
+KARURVYSYA,Karur Vysya Bank,Banking,Mid Cap
+POONAWALLA,Poonawalla Fincorp,NBFC,Mid Cap
+ANGELONE,Angel One,Capital Markets,Mid Cap
+CDSL,Central Depository Services,Capital Markets,Mid Cap
+BSE,BSE,Capital Markets,Mid Cap
+CAMS,Computer Age Management Services,Capital Markets,Mid Cap
+IEX,Indian Energy Exchange,Capital Markets,Mid Cap
+HINDZINC,Hindustan Zinc,Metals,Mid Cap
+NATIONALUM,National Aluminium,Metals,Mid Cap
+JSL,Jindal Stainless,Metals,Mid Cap
+APLAPOLLO,APL Apollo Tubes,Metals,Mid Cap
+TORNTPOWER,Torrent Power,Power,Mid Cap
+NHPC,NHPC,Power,Mid Cap
+SJVN,SJVN,Power,Mid Cap
+IREDA,Indian Renewable Energy,NBFC,Mid Cap
+CESC,CESC,Power,Mid Cap
+BRIGADE,Brigade Enterprises,Realty,Mid Cap
+SOBHA,Sobha,Realty,Mid Cap
+KALYANKJIL,Kalyan Jewellers,Retail,Mid Cap
+ABFRL,Aditya Birla Fashion & Retail,Retail,Mid Cap
