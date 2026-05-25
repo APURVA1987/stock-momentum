@@ -277,7 +277,10 @@ def make_stock_chart(symbol_ns: str, period: str, trigger=None, invalidation=Non
 # -----------------------------------------------------------------------------
 # MAIN DISPLAY
 # -----------------------------------------------------------------------------
-if "result" in st.session_state:
+# Guard: only display when we have a NEW-format result (has "strong" key).
+# This prevents a crash if an OLD-format result is left over in session_state
+# after a code update (just click Run Scan again to refresh it).
+if "result" in st.session_state and "strong" in st.session_state["result"]:
     result = st.session_state["result"]
     period = st.session_state.get("period", "5y")
     strong, wait = result["strong"], result["wait"]
