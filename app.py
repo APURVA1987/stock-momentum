@@ -1,18 +1,18 @@
 # app.py
 # -----------------------------------------------------------------------------
-# This is the DASHBOARD (the screen you see in the browser), built with Streamlit.
-# Run it with:    streamlit run app.py
+# NSE Momentum Breakout DASHBOARD (the screen you see in the browser).
+# Built with Streamlit + Plotly. Run it with:   streamlit run app.py
 #
 # NOTE FOR NON-CODERS:
-# - This file only handles the SCREEN (cards, tables, tabs, charts).
-# - The scanning maths lives in scanner.py and indicators.py.
-# - To change how strict the scan is, use the sidebar (left) or edit the
-#   THRESHOLDS block at the top of scanner.py.
+# - This file ONLY handles the visual dashboard (cards, charts, gauges, tabs).
+# - The scanning maths is untouched and lives in scanner.py / indicators.py.
+# - Each dashboard section is clearly commented below.
 # -----------------------------------------------------------------------------
 
 import os
 
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
@@ -26,17 +26,47 @@ OUTPUTS_DIR = os.path.join(BASE_DIR, "outputs")
 DEFAULT_UNIVERSE = os.path.join(BASE_DIR, "universe.csv")
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
 
-st.set_page_config(page_title="NSE Momentum Breakout Scanner", layout="wide")
-st.title("NSE Momentum Breakout Scanner - 200 DMA Retest Strategy")
-st.caption(
-    "Educational screening only. Not financial advice. "
-    "Always confirm chart, liquidity, news and risk before trading."
-)
+st.set_page_config(page_title="NSE Momentum Breakout Dashboard", layout="wide")
+
+# Colour language used across the whole dashboard.
+CLASS_COLORS = {
+    "Strong Breakout / Actionable": "#1e7d32",   # green
+    "Wait for Confirmation": "#e08e0b",          # orange/yellow
+    "Early Watchlist": "#1f77b4",                # blue
+    "Rejected": "#8b1e1e",                       # red/grey
+}
+RISK_COLORS = {"Low Risk": "#1e7d32", "Medium Risk": "#e08e0b", "High Risk": "#8b1e1e"}
 
 
 # -----------------------------------------------------------------------------
-# CACHED HELPERS (avoid re-downloading the same data)
+# SMALL UI HELPERS
 # -----------------------------------------------------------------------------
+def metric_card(col, label, value, color, sub=""):
+    """A coloured metric card (nicer than the plain st.metric box)."""
+    col.markdown(
+        f"<div style='background:{color};padding:14px 10px;border-radius:12px;"
+        f"text-align:center;color:white;'>"
+        f"<div style='font-size:13px;opacity:.9'>{label}</div>"
+        f"<div style='font-size:30px;font-weight:700;line-height:1.1'>{value}</div>"
+        f"<div style='font-size:11px;opacity:.9'>{sub}</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def badge(text, color):
+    return (f"<span style='background:{color};color:white;padding:3px 10px;"
+            f"border-radius:12px;font-size:13px;font-weight:600'>{text}</span>")
+
+
+def safe_num(v, default=0.0):
+    try:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return default
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
 @st.cache_data(show_spinner=False)
 def cached_history(symbol_ns: str, period: str) -> pd.DataFrame:
     return scanner.download_history(symbol_ns, period=period)
@@ -57,8 +87,15 @@ def load_universe(uploaded_file) -> pd.DataFrame:
     return df
 
 
+def classified_all(result) -> pd.DataFrame:
+    """Strong + Wait + Watchlist combined into one frame (for maps/charts)."""
+    parts = [result[k] for k in ("strong", "wait", "watchlist")
+             if isinstance(result[k], pd.DataFrame) and not result[k].empty]
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
+
 # -----------------------------------------------------------------------------
-# SIDEBAR CONTROLS
+# SIDEBAR (unchanged scan controls)
 # -----------------------------------------------------------------------------
 st.sidebar.header("Scan Settings")
 uploaded = st.sidebar.file_uploader("Upload universe.csv (optional)", type=["csv"])
@@ -69,14 +106,11 @@ retest_window = st.sidebar.number_input("Retest window (days)", 20, 120, 60, 5)
 retest_tol = st.sidebar.number_input("200 DMA retest tolerance %", 1.0, 15.0, 7.0, 0.5)
 min_rsi = st.sidebar.number_input("Min RSI", 30.0, 90.0, 55.0, 1.0)
 min_vol_ratio = st.sidebar.number_input("Min volume ratio (strong breakout)", 1.0, 5.0, 1.5, 0.1)
-# NOTE: classification uses fixed score bands (Strong >=80, Wait 65-79,
-# Watchlist 55-64). This minimum is the REJECT floor: anything below it is
-# rejected. Default 55 keeps the Early Watchlist visible.
 min_score = st.sidebar.number_input("Minimum score (below this = Rejected)", 0, 100, 55, 5)
 run_clicked = st.sidebar.button("Run Scan", type="primary")
 
 
-def filter_by_cap(df: pd.DataFrame, choice: str) -> pd.DataFrame:
+def filter_by_cap(df, choice):
     if choice == "Large Cap only":
         return df[df["market_cap_category"].str.strip().str.lower() == "large cap"]
     if choice == "Mid Cap only":
@@ -92,7 +126,6 @@ if run_clicked:
     if universe.empty:
         st.warning("No stocks match the selected market cap category.")
         st.stop()
-
     st.info(f"Scanning {len(universe)} stocks for period {period} ...")
     progress = st.progress(0.0)
     status = st.empty()
@@ -113,129 +146,60 @@ if run_clicked:
     st.session_state["period"] = period
 
 
-# -----------------------------------------------------------------------------
-# COLOUR CODING (by classification + risk)
-# -----------------------------------------------------------------------------
-def style_table(df: pd.DataFrame):
-    # Colour by classification if present, else fall back to score bands.
-    # (The Wait/Watchlist tab views omit the Classification column, so we must
-    #  also work from Score alone.)
-    def row_style(row):
-        cls = str(row.get("Classification", ""))
-        try:
-            score = float(row.get("Score"))
-        except (TypeError, ValueError):
-            score = None
-        green = "background-color: #1e7d32; color: white"
-        yellow = "background-color: #b59f00; color: black"
-        blue = "background-color: #1f4e79; color: white"
-        red = "background-color: #8b1e1e; color: white"
-        if cls == "Rejected":
-            bg = red
-        elif cls == "Strong Breakout / Actionable" or (score is not None and score >= 80):
-            bg = green
-        elif cls == "Wait for Confirmation" or (score is not None and 65 <= score < 80):
-            bg = yellow
-        elif cls == "Early Watchlist" or (score is not None and 55 <= score < 65):
-            bg = blue
-        else:
-            bg = red
-        styles = [bg] * len(row)
-        if str(row.get("Breakout Status", "")) == "Above previous 52W high":
-            styles = ["background-color: #0b6e2e; color: white"] * len(row)
-        if str(row.get("Risk Level", "")) == "High Risk":
-            styles = ["background-color: #6e0b0b; color: white"] * len(row)
-        return styles
-    return df.style.apply(row_style, axis=1)
-
-
-def show_table(df: pd.DataFrame, cols=None, empty_msg="No stocks in this category."):
-    if df is None or df.empty:
-        st.info(empty_msg)
-        return
-    view = df[[c for c in cols if c in df.columns]] if cols else df
-    st.dataframe(style_table(view), use_container_width=True, height=480)
-
-
-# Column order for the "Wait for Confirmation" tab (exactly as requested).
-WAIT_COLS = ["Rank", "Symbol", "Company", "Sector", "Market Cap Category", "CMP",
-             "Score", "RSI 14", "Volume Ratio", "52W High", "Distance from 52W High %",
-             "20 DMA", "50 DMA", "200 DMA", "Distance from 200 DMA %", "Retest Date",
-             "Days Below 200 DMA", "Relative Strength %", "Breakout Status",
-             "Confirmation Needed", "Trigger Price", "Suggested Alert Price",
-             "Invalidation Level", "Risk Level", "Final Remark"]
-
-STRONG_COLS = ["Rank", "Symbol", "Company", "Sector", "Market Cap Category", "CMP",
-               "Score", "Classification", "RSI 14", "ADX 14", "Volume Ratio",
-               "52W High", "Distance from 52W High %", "20 DMA", "50 DMA", "200 DMA",
-               "Distance from 200 DMA %", "Retest Date", "Days Below 200 DMA",
-               "Relative Strength %", "Breakout Status", "Entry Zone", "Trigger Price",
-               "Stop Loss", "Target 1", "Target 2", "Risk Reward", "Risk Level",
-               "Final Remark"]
-
-WATCH_COLS = ["Rank", "Symbol", "Company", "Sector", "Market Cap Category", "CMP",
-              "Score", "Classification", "RSI 14", "ADX 14", "Volume Ratio",
-              "52W High", "Distance from 52W High %", "200 DMA",
-              "Distance from 200 DMA %", "Retest Date", "Days Below 200 DMA",
-              "Relative Strength %", "Breakout Status", "Confirmation Needed",
-              "Trigger Price", "Risk Level", "Final Remark"]
-
-REJECT_COLS = ["Symbol", "Company", "Sector", "Market Cap Category",
-               "Classification", "Score", "Reason"]
-
-
-# -----------------------------------------------------------------------------
-# EXPORT (Excel multi-sheet + CSVs)
-# -----------------------------------------------------------------------------
-def export_outputs(result: dict):
+# =============================================================================
+# EXPORT (existing system kept; plus new dashboard_summary.xlsx)
+# =============================================================================
+def export_outputs(result):
     strong, wait = result["strong"], result["wait"]
     watch, rejected = result["watchlist"], result["rejected"]
-    sector = result["sector_strength"]
-    ctx = result["nifty_context"]
-
-    strong_prompt = scanner.build_strong_prompt(strong)
-    wait_prompt = scanner.build_wait_prompt(wait)
-
+    sector, ctx = result["sector_strength"], result["nifty_context"]
     xlsx_path = os.path.join(OUTPUTS_DIR, "scanner_output.xlsx")
-    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
-        (strong if not strong.empty else pd.DataFrame()).to_excel(
-            writer, sheet_name="Strong_Breakout", index=False)
-        (wait if not wait.empty else pd.DataFrame()).to_excel(
-            writer, sheet_name="Wait_For_Confirmation", index=False)
-        (watch if not watch.empty else pd.DataFrame()).to_excel(
-            writer, sheet_name="Early_Watchlist", index=False)
-        (rejected if not rejected.empty else pd.DataFrame()).to_excel(
-            writer, sheet_name="Rejected", index=False)
-        (sector if not sector.empty else pd.DataFrame()).to_excel(
-            writer, sheet_name="Sector_Strength", index=False)
+    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as w:
+        (strong if not strong.empty else pd.DataFrame()).to_excel(w, "Strong_Breakout", index=False)
+        (wait if not wait.empty else pd.DataFrame()).to_excel(w, "Wait_For_Confirmation", index=False)
+        (watch if not watch.empty else pd.DataFrame()).to_excel(w, "Early_Watchlist", index=False)
+        (rejected if not rejected.empty else pd.DataFrame()).to_excel(w, "Rejected", index=False)
+        (sector if not sector.empty else pd.DataFrame()).to_excel(w, "Sector_Strength", index=False)
         pd.DataFrame([{
-            "Market Regime": result["regime"],
-            "Nifty Close": ctx.get("nifty_close"),
-            "Nifty 50 DMA": ctx.get("nifty_50dma"),
-            "Nifty 200 DMA": ctx.get("nifty_200dma"),
+            "Market Regime": result["regime"], "Nifty Close": ctx.get("nifty_close"),
+            "Nifty 50 DMA": ctx.get("nifty_50dma"), "Nifty 200 DMA": ctx.get("nifty_200dma"),
             "Nifty 20-Day Return %": ctx.get("nifty_20d_return"),
-            "Top 3 Sectors": ", ".join(result["top_sectors"]),
-            "Scanned At": result["scanned_at"],
-        }]).to_excel(writer, sheet_name="Market_Regime", index=False)
-        pd.DataFrame({"Prompt": [strong_prompt, wait_prompt]}).to_excel(
-            writer, sheet_name="Claude_Review", index=False)
-
-    # CSVs
-    if not strong.empty:
-        strong.to_csv(os.path.join(OUTPUTS_DIR, "strong_breakout.csv"), index=False)
-    if not wait.empty:
-        wait.to_csv(os.path.join(OUTPUTS_DIR, "wait_for_confirmation.csv"), index=False)
-    if not watch.empty:
-        watch.to_csv(os.path.join(OUTPUTS_DIR, "early_watchlist.csv"), index=False)
-    if not rejected.empty:
-        rejected.to_csv(os.path.join(OUTPUTS_DIR, "rejected_stocks.csv"), index=False)
+            "Top 3 Sectors": ", ".join(result["top_sectors"]), "Scanned At": result["scanned_at"],
+        }]).to_excel(w, "Market_Regime", index=False)
+        pd.DataFrame({"Prompt": [scanner.build_strong_prompt(strong),
+                                 scanner.build_wait_prompt(wait)]}).to_excel(w, "Claude_Review", index=False)
+    for df, fn in [(strong, "strong_breakout.csv"), (wait, "wait_for_confirmation.csv"),
+                   (watch, "early_watchlist.csv"), (rejected, "rejected_stocks.csv")]:
+        if df is not None and not df.empty:
+            df.to_csv(os.path.join(OUTPUTS_DIR, fn), index=False)
     return xlsx_path
 
 
-# -----------------------------------------------------------------------------
-# STOCK CHART (price + MAs + 52W high + trigger + invalidation + Vol + RSI + ADX)
-# -----------------------------------------------------------------------------
-def make_stock_chart(symbol_ns: str, period: str, trigger=None, invalidation=None):
+def export_dashboard_summary(result, overext):
+    """New optional workbook with the most useful at-a-glance sheets."""
+    strong, wait = result["strong"], result["wait"]
+    path = os.path.join(OUTPUTS_DIR, "dashboard_summary.xlsx")
+    summary = pd.DataFrame([{
+        "Scanned At": result["scanned_at"], "Universe": result.get("universe_count"),
+        "Market Regime": result["regime"], "Strong Breakout": len(strong),
+        "Wait for Confirmation": len(wait), "Early Watchlist": len(result["watchlist"]),
+        "Rejected": len(result["rejected"]), "Failed": len(result["failed"]),
+        "Top 3 Sectors": ", ".join(result["top_sectors"]),
+    }])
+    with pd.ExcelWriter(path, engine="openpyxl") as w:
+        summary.to_excel(w, "Dashboard_Summary", index=False)
+        (result["sector_strength"] if not result["sector_strength"].empty else pd.DataFrame()
+         ).to_excel(w, "Sector_Strength", index=False)
+        (strong.head(10) if not strong.empty else pd.DataFrame()).to_excel(w, "Top_10_Strong", index=False)
+        (wait.head(10) if not wait.empty else pd.DataFrame()).to_excel(w, "Top_10_Wait_For_Confirmation", index=False)
+        (overext if not overext.empty else pd.DataFrame()).to_excel(w, "Overextended_Stocks", index=False)
+    return path
+
+
+# =============================================================================
+# CANDLESTICK (price + MAs + 52W high + trigger + invalidation + Vol + RSI + ADX)
+# =============================================================================
+def make_stock_chart(symbol_ns, period, trigger=None, invalidation=None):
     df = cached_history(symbol_ns, period)
     if df.empty:
         st.warning("No chart data available for this symbol.")
@@ -245,7 +209,6 @@ def make_stock_chart(symbol_ns: str, period: str, trigger=None, invalidation=Non
     rsi14 = ind.rsi(close, 14)
     adx14 = ind.adx(df["High"], df["Low"], close, 14)
     high_52w = close.tail(252).max()
-
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True,
                         row_heights=[0.5, 0.18, 0.16, 0.16], vertical_spacing=0.03,
                         subplot_titles=("Price + Moving Averages", "Volume", "RSI 14", "ADX 14"))
@@ -254,32 +217,56 @@ def make_stock_chart(symbol_ns: str, period: str, trigger=None, invalidation=Non
     fig.add_trace(go.Scatter(x=df.index, y=dma20, name="20 DMA", line=dict(width=1)), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=dma50, name="50 DMA", line=dict(width=1)), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=dma200, name="200 DMA", line=dict(width=2)), row=1, col=1)
-    fig.add_hline(y=high_52w, line_dash="dot", line_color="orange",
-                  annotation_text="52W High", row=1, col=1)
+    fig.add_hline(y=high_52w, line_dash="dot", line_color="orange", annotation_text="52W High", row=1, col=1)
     if trigger:
-        fig.add_hline(y=trigger, line_dash="dash", line_color="lime",
-                      annotation_text="Trigger", row=1, col=1)
+        fig.add_hline(y=trigger, line_dash="dash", line_color="lime", annotation_text="Trigger", row=1, col=1)
     if invalidation:
-        fig.add_hline(y=invalidation, line_dash="dash", line_color="red",
-                      annotation_text="Invalidation", row=1, col=1)
+        fig.add_hline(y=invalidation, line_dash="dash", line_color="red", annotation_text="Invalidation/SL", row=1, col=1)
     fig.add_trace(go.Bar(x=df.index, y=df["Volume"], name="Volume"), row=2, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=rsi14, name="RSI 14"), row=3, col=1)
     fig.add_hline(y=60, line_dash="dot", line_color="green", row=3, col=1)
-    fig.add_hline(y=70, line_dash="dot", line_color="red", row=3, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=adx14, name="ADX 14"), row=4, col=1)
     fig.add_hline(y=20, line_dash="dot", line_color="grey", row=4, col=1)
-    fig.add_hline(y=25, line_dash="dot", line_color="green", row=4, col=1)
-    fig.update_layout(height=850, xaxis_rangeslider_visible=False, showlegend=True,
-                      margin=dict(t=40, b=20))
+    fig.update_layout(height=820, xaxis_rangeslider_visible=False, showlegend=True,
+                      margin=dict(t=40, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
 
-# -----------------------------------------------------------------------------
-# MAIN DISPLAY
-# -----------------------------------------------------------------------------
-# Guard: only display when we have a NEW-format result (has "strong" key).
-# This prevents a crash if an OLD-format result is left over in session_state
-# after a code update (just click Run Scan again to refresh it).
+def score_gauge(score):
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number", value=safe_num(score),
+        gauge={"axis": {"range": [0, 100]}, "bar": {"color": "black"},
+               "steps": [{"range": [0, 55], "color": "#8b1e1e"},
+                         {"range": [55, 65], "color": "#1f77b4"},
+                         {"range": [65, 80], "color": "#e08e0b"},
+                         {"range": [80, 100], "color": "#1e7d32"}]}))
+    fig.update_layout(height=260, margin=dict(t=30, b=10))
+    return fig
+
+
+# =============================================================================
+# CARD RENDERERS
+# =============================================================================
+def stock_cards(df, n, accent, fields):
+    """Render the top `n` rows of df as coloured cards (fields = list of (label,col))."""
+    rows = df.head(n)
+    cols = st.columns(min(5, max(1, len(rows))))
+    for i, (_, r) in enumerate(rows.iterrows()):
+        body = "".join(
+            f"<div style='font-size:12px'><b>{lbl}:</b> {r.get(c, '-')}</div>"
+            for lbl, c in fields)
+        cols[i % len(cols)].markdown(
+            f"<div style='border:2px solid {accent};border-radius:12px;padding:10px;"
+            f"margin-bottom:8px;background:rgba(255,255,255,0.03)'>"
+            f"<div style='font-size:17px;font-weight:700'>{r['Symbol']}</div>"
+            f"<div style='font-size:11px;opacity:.8;margin-bottom:6px'>{r['Company']}</div>"
+            f"{body}</div>", unsafe_allow_html=True)
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+# Guard: only render when we have a NEW-format result in session_state.
 if "result" in st.session_state and "strong" in st.session_state["result"]:
     result = st.session_state["result"]
     period = st.session_state.get("period", "5y")
@@ -288,123 +275,365 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     failed = result["failed"]
     sector = result["sector_strength"]
     regime = result["regime"]
-    top3 = ", ".join(result["top_sectors"][:3]) if result["top_sectors"] else "-"
+    ctx = result["nifty_context"]
+    allc = classified_all(result)
 
-    # --- Summary cards (two rows of four) ---
-    r1 = st.columns(4)
-    r1[0].metric("Total Scanned", result.get("universe_count", "-"))
-    r1[1].metric("Strong Breakout", len(strong))
-    r1[2].metric("Wait for Confirmation", len(wait))
-    r1[3].metric("Early Watchlist", len(watch))
-    r2 = st.columns(4)
-    r2[0].metric("Rejected", len(rejected))
-    r2[1].metric("Market Regime", regime)
-    r2[2].metric("Top 3 Sectors", top3)
-    r2[3].metric("Failed Tickers", len(failed))
+    # ---- A. HEADER ----
+    regime_color = {"Bullish": "#1e7d32", "Neutral": "#e08e0b",
+                    "Weak": "#8b1e1e"}.get(regime, "#555")
+    st.markdown(
+        f"<h1 style='margin-bottom:0'>NSE Momentum Breakout Dashboard</h1>"
+        f"<div style='opacity:.8;font-size:13px'>Last scan: {result['scanned_at']} "
+        f"&nbsp;|&nbsp; Universe: {result.get('universe_count')} &nbsp;|&nbsp; "
+        f"Period: {period} &nbsp;|&nbsp; Market Regime: {badge(regime, regime_color)}</div>",
+        unsafe_allow_html=True)
+    st.caption("Educational screening only. Not financial advice. Confirm chart, "
+               "liquidity, news and risk before trading.")
+    st.write("")
 
+    # ---- B. TOP SUMMARY CARDS ----
+    c = st.columns(6)
+    metric_card(c[0], "Total Scanned", result.get("universe_count", "-"), "#37474f")
+    metric_card(c[1], "Strong Breakout", len(strong), CLASS_COLORS["Strong Breakout / Actionable"])
+    metric_card(c[2], "Wait for Confirmation", len(wait), CLASS_COLORS["Wait for Confirmation"])
+    metric_card(c[3], "Early Watchlist", len(watch), CLASS_COLORS["Early Watchlist"])
+    metric_card(c[4], "Rejected", len(rejected), CLASS_COLORS["Rejected"])
+    metric_card(c[5], "Failed Tickers", len(failed), "#555")
     if regime == "Weak":
         st.warning("Market Regime is WEAK - trade with caution and reduce position size.")
+    st.write("")
 
-    tabs = st.tabs(["Strong Breakout", "Wait for Confirmation", "Early Watchlist",
-                    "Rejected", "Stock Chart", "Sector Strength", "Claude Review", "Export"])
+    tabs = st.tabs(["Market Overview", "Strong Breakout", "Wait for Confirmation",
+                    "Early Watchlist", "Sector Dashboard", "Momentum Map",
+                    "Stock Deep Dive", "Rejected / Failed", "Claude Review", "Export"])
 
-    # 1) Strong Breakout
+    # =====================================================================
+    # 1) MARKET OVERVIEW
+    # =====================================================================
     with tabs[0]:
-        st.subheader("Strong Breakout / Actionable")
-        show_table(strong, STRONG_COLS, "No strong breakout stocks with current settings.")
+        cc = st.columns(2)
+        # A. Classification donut
+        donut = pd.DataFrame({
+            "Class": ["Strong Breakout", "Wait for Confirmation", "Early Watchlist", "Rejected"],
+            "Count": [len(strong), len(wait), len(watch), len(rejected)]})
+        fig = px.pie(donut, names="Class", values="Count", hole=0.5,
+                     color="Class", color_discrete_map={
+                         "Strong Breakout": CLASS_COLORS["Strong Breakout / Actionable"],
+                         "Wait for Confirmation": CLASS_COLORS["Wait for Confirmation"],
+                         "Early Watchlist": CLASS_COLORS["Early Watchlist"],
+                         "Rejected": CLASS_COLORS["Rejected"]},
+                     title="Classification split")
+        cc[0].plotly_chart(fig, use_container_width=True)
 
-    # 2) Wait for Confirmation
+        # B. Score distribution (bands)
+        def scores_of(df):
+            if df is None or df.empty or "Score" not in df:
+                return []
+            return [s for s in pd.to_numeric(df["Score"], errors="coerce").dropna().tolist()]
+        all_scores = scores_of(strong) + scores_of(wait) + scores_of(watch) + scores_of(rejected)
+        bands = {"80-100": 0, "65-80": 0, "55-65": 0, "Below 55": 0}
+        for s in all_scores:
+            if s >= 80: bands["80-100"] += 1
+            elif s >= 65: bands["65-80"] += 1
+            elif s >= 55: bands["55-65"] += 1
+            else: bands["Below 55"] += 1
+        bdf = pd.DataFrame({"Band": list(bands), "Count": list(bands.values())})
+        cc[1].plotly_chart(px.bar(bdf, x="Band", y="Count", title="Score distribution",
+                                  color="Band", color_discrete_sequence=["#1e7d32", "#e08e0b", "#1f77b4", "#8b1e1e"]),
+                           use_container_width=True)
+
+        # C. Market regime panel
+        st.subheader("Market Regime (Nifty 50)")
+        m = st.columns(4)
+        nclose = ctx.get("nifty_close"); n50 = ctx.get("nifty_50dma"); n200 = ctx.get("nifty_200dma")
+        metric_card(m[0], "Nifty Close", nclose, "#37474f")
+        metric_card(m[1], "vs 50 DMA", "Above" if safe_num(nclose) > safe_num(n50) else "Below",
+                    "#1e7d32" if safe_num(nclose) > safe_num(n50) else "#8b1e1e", sub=f"50 DMA {n50}")
+        metric_card(m[2], "vs 200 DMA", "Above" if safe_num(nclose) > safe_num(n200) else "Below",
+                    "#1e7d32" if safe_num(nclose) > safe_num(n200) else "#8b1e1e", sub=f"200 DMA {n200}")
+        metric_card(m[3], "Nifty 20D Return %", ctx.get("nifty_20d_return"),
+                    "#1e7d32" if safe_num(ctx.get("nifty_20d_return")) > 0 else "#8b1e1e")
+
+        # D + E. Top momentum + relative strength
+        if not allc.empty:
+            d = st.columns(2)
+            top_score = allc.sort_values("Score", ascending=False).head(10)
+            d[0].plotly_chart(px.bar(top_score, x="Symbol", y="Score", color="Classification",
+                                     color_discrete_map=CLASS_COLORS, title="Top 10 by Score",
+                                     hover_data=["RSI 14", "Volume Ratio", "Relative Strength %"]),
+                              use_container_width=True)
+            top_rs = allc.sort_values("Relative Strength %", ascending=False).head(10)
+            d[1].plotly_chart(px.bar(top_rs, x="Symbol", y="Relative Strength %", color="Classification",
+                                     color_discrete_map=CLASS_COLORS, title="Top 10 by Relative Strength vs Nifty"),
+                              use_container_width=True)
+
+    # =====================================================================
+    # 2) STRONG BREAKOUT
+    # =====================================================================
     with tabs[1]:
-        st.subheader("Wait for Confirmation")
-        st.caption("Score 65-79: setup developing, breakout NOT yet confirmed. "
-                   "Wait for the trigger condition before any entry.")
-        show_table(wait, WAIT_COLS, "No wait-for-confirmation stocks with current settings.")
-
-    # 3) Early Watchlist
-    with tabs[2]:
-        st.subheader("Early Watchlist")
-        st.caption("Score 55-64: momentum developing but not ready. Keep on radar.")
-        show_table(watch, WATCH_COLS, "No early-watchlist stocks with current settings.")
-
-    # 4) Rejected
-    with tabs[3]:
-        st.subheader("Rejected")
-        show_table(rejected, REJECT_COLS, "No rejected stocks.")
-        if failed:
-            st.write("**Failed tickers (download error / no data):**")
-            st.write(", ".join(failed))
-
-    # 5) Stock Chart
-    with tabs[4]:
-        combined = pd.concat([strong, wait, watch], ignore_index=True) \
-            if any(len(x) for x in [strong, wait, watch]) else pd.DataFrame()
-        if combined.empty:
-            st.info("Run a scan that produces classified stocks to view charts.")
+        st.subheader("Strong Breakout / Actionable")
+        if strong.empty:
+            st.info("No strong breakout stocks with current settings.")
         else:
-            pick = st.selectbox("Select a stock", combined["Symbol"].tolist())
-            if pick:
-                row = combined[combined["Symbol"] == pick].iloc[0]
-                cls = row["Classification"]
-                if cls == "Strong Breakout / Actionable":
-                    st.success("Breakout candidate. Check chart and risk before entry.")
-                elif cls == "Wait for Confirmation":
-                    st.warning("This stock is not yet an entry candidate. "
-                               "Wait for trigger condition.")
-                else:
-                    st.info("Early watchlist - momentum still developing.")
-                st.write(f"**{row['Company']}** | CMP {row['CMP']} | Score {row['Score']} "
-                         f"| {row['Risk Level']} | {row['Breakout Status']}")
-                # Transparent component-wise score (detailed view).
-                sc = st.columns(5)
-                sc[0].metric("Trend /25", row.get("Trend Score", "-"))
-                sc[1].metric("Pullback /20", row.get("Pullback Score", "-"))
-                sc[2].metric("Momentum /20", row.get("Momentum Score", "-"))
-                sc[3].metric("Breakout /20", row.get("Breakout Score", "-"))
-                sc[4].metric("Risk /15", row.get("Risk Score", "-"))
-                st.write(f"Trigger: {row['Trigger Price']} | "
-                         f"Alert: {row['Suggested Alert Price']} | "
-                         f"Invalidation: {row['Invalidation Level']}")
-                if row.get("Confirmation Needed", "-") not in ("-", ""):
-                    st.write(f"Confirmation needed: {row['Confirmation Needed']}")
-                st.write(f"Stop Loss: {row['Stop Loss']}")
-                st.write(f"Targets: {row['Target 1']} | {row['Target 2']}")
-                make_stock_chart(f"{pick}.NS", period,
-                                 trigger=row.get("Trigger Price"),
-                                 invalidation=row.get("Invalidation Level"))
+            # A. Top 5 cards
+            stock_cards(strong, 5, CLASS_COLORS["Strong Breakout / Actionable"], [
+                ("Score", "Score"), ("CMP", "CMP"), ("Breakout", "Breakout Status"),
+                ("RSI", "RSI 14"), ("Vol Ratio", "Volume Ratio"), ("Risk", "Risk Level"),
+                ("Entry", "Entry Zone"), ("Stop", "Stop Loss"),
+                ("T1", "Target 1"), ("T2", "Target 2")])
+            st.write("")
+            g = st.columns(2)
+            # B. Ranking bar
+            g[0].plotly_chart(px.bar(strong.sort_values("Score").tail(20), x="Score", y="Symbol",
+                                     orientation="h", title="Strong Breakout ranking",
+                                     hover_data=["RSI 14", "Volume Ratio", "Relative Strength %"],
+                                     color="Score", color_continuous_scale="Greens"),
+                              use_container_width=True)
+            # C. Risk-reward scatter
+            sd = strong.copy()
+            sd["Risk %"] = ((sd["CMP"] - sd["Invalidation Level"]) / sd["CMP"] * 100).round(2)
+            g[1].plotly_chart(px.scatter(sd, x="Risk %", y="Risk Reward", size="Volume Ratio",
+                                         color="Risk Level", color_discrete_map=RISK_COLORS,
+                                         hover_name="Symbol", title="Risk vs Reward (bubble = volume)",
+                                         size_max=30),
+                              use_container_width=True)
+            # D. Detailed table
+            with st.expander("Detailed table"):
+                st.dataframe(strong, use_container_width=True, height=420)
 
-    # 6) Sector Strength
-    with tabs[5]:
-        st.subheader("Sector Strength (avg 20-day return of scanned stocks)")
+    # =====================================================================
+    # 3) WAIT FOR CONFIRMATION
+    # =====================================================================
+    with tabs[2]:
+        st.warning("These stocks are NOT entry candidates yet. Set alerts and wait "
+                   "for the trigger condition.")
+        if wait.empty:
+            st.info("No wait-for-confirmation stocks with current settings.")
+        else:
+            wd = wait.copy()
+            wd["Distance to Trigger %"] = ((wd["Trigger Price"] / wd["CMP"] - 1) * 100).round(2)
+            # B. Cards (top 10, two rows of five)
+            stock_cards(wd, 5, CLASS_COLORS["Wait for Confirmation"], [
+                ("CMP", "CMP"), ("Score", "Score"), ("Trigger", "Trigger Price"),
+                ("Alert", "Suggested Alert Price"), ("To Trigger %", "Distance to Trigger %"),
+                ("RSI", "RSI 14"), ("Vol", "Volume Ratio"), ("Need", "Confirmation Needed")])
+            st.write("")
+            gg = st.columns(2)
+            # C. Distance to breakout
+            near = wd.sort_values("Distance to Trigger %").head(15)
+            gg[0].plotly_chart(px.bar(near, x="Distance to Trigger %", y="Symbol", orientation="h",
+                                      title="Closest to trigger", color="Distance to Trigger %",
+                                      color_continuous_scale="Oranges_r"), use_container_width=True)
+            # D. Confirmation type breakdown
+            keys = {"Price breakout (52W high)": "52W high", "RSI cross 60": "RSI",
+                    "Volume expansion": "volume", "Sustain above 50 DMA": "50 DMA",
+                    "2-day sustain": "consecutive", "Relative strength": "relative strength"}
+            counts = {k: int(wd["Confirmation Needed"].str.contains(v, case=False, na=False).sum())
+                      for k, v in keys.items()}
+            cdf = pd.DataFrame({"Confirmation": list(counts), "Count": list(counts.values())})
+            gg[1].plotly_chart(px.bar(cdf, x="Count", y="Confirmation", orientation="h",
+                                      title="What are they waiting for?",
+                                      color_discrete_sequence=["#e08e0b"]), use_container_width=True)
+            # E. Alert watchlist table
+            alert_cols = ["Symbol", "Company", "CMP", "Trigger Price", "Suggested Alert Price",
+                          "Distance to Trigger %", "Confirmation Needed", "Invalidation Level",
+                          "Score", "Risk Level"]
+            tbl = wd.sort_values(["Distance to Trigger %", "Score", "Relative Strength %"],
+                                 ascending=[True, False, False])
+            st.dataframe(tbl[[c for c in alert_cols if c in tbl.columns]],
+                         use_container_width=True, height=420)
+
+    # =====================================================================
+    # 4) EARLY WATCHLIST
+    # =====================================================================
+    with tabs[3]:
+        st.info("Observe only. No trade until confirmation improves.")
+        if watch.empty:
+            st.info("No early-watchlist stocks with current settings.")
+        else:
+            stock_cards(watch, 5, CLASS_COLORS["Early Watchlist"], [
+                ("CMP", "CMP"), ("Score", "Score"), ("RSI", "RSI 14"),
+                ("Vol", "Volume Ratio"), ("Retest", "Retest Date"),
+                ("RelStr %", "Relative Strength %"), ("Breakout", "Breakout Status")])
+            st.write("")
+            st.plotly_chart(px.bar(watch.sort_values("Score").tail(20), x="Score", y="Symbol",
+                                   orientation="h", title="Top early setups by score",
+                                   color="Score", color_continuous_scale="Blues"),
+                            use_container_width=True)
+            with st.expander("Detailed table"):
+                st.dataframe(watch, use_container_width=True, height=400)
+
+    # =====================================================================
+    # 5) SECTOR DASHBOARD
+    # =====================================================================
+    with tabs[4]:
         if sector is None or sector.empty:
             st.info("No sector data available.")
         else:
-            st.dataframe(sector, use_container_width=True, height=480)
+            st.plotly_chart(px.bar(sector.sort_values("Avg 20-Day Return %"),
+                                   x="Avg 20-Day Return %", y="Sector", orientation="h",
+                                   title="Sector strength (avg 20-day return)",
+                                   color="Avg 20-Day Return %", color_continuous_scale="RdYlGn"),
+                            use_container_width=True)
+            # Top 3 sector cards
+            st.subheader("Top sectors")
+            tcols = st.columns(3)
+            for i, (_, s) in enumerate(sector.head(3).iterrows()):
+                n_strong = int((strong["Sector"] == s["Sector"]).sum()) if not strong.empty else 0
+                n_wait = int((wait["Sector"] == s["Sector"]).sum()) if not wait.empty else 0
+                metric_card(tcols[i], s["Sector"], f"{s['Avg 20-Day Return %']}%", "#1f4e79",
+                            sub=f"{n_strong} strong / {n_wait} wait")
+            # Sector heatmap-style table (built from classified stocks)
+            if not allc.empty:
+                agg = allc.groupby("Sector").agg(
+                    Avg_Score=("Score", "mean"),
+                    Strong=("Classification", lambda x: (x == "Strong Breakout / Actionable").sum()),
+                    Wait=("Classification", lambda x: (x == "Wait for Confirmation").sum()),
+                    Avg_RelStr=("Relative Strength %", "mean"),
+                    Avg_VolRatio=("Volume Ratio", "mean")).round(2).reset_index()
+                st.subheader("Sector heatmap")
+                # Plotly heatmap (no matplotlib dependency): colour = per-column
+                # normalised value, cell text = the actual number.
+                metrics = ["Avg_Score", "Strong", "Wait", "Avg_RelStr", "Avg_VolRatio"]
+                hm = agg.set_index("Sector")[metrics]
+                znorm = (hm - hm.min()) / (hm.max() - hm.min() + 1e-9)
+                heat = go.Figure(go.Heatmap(
+                    z=znorm.values, x=metrics, y=hm.index.tolist(), text=hm.values,
+                    texttemplate="%{text}", colorscale="RdYlGn", showscale=False))
+                heat.update_layout(height=max(300, 26 * len(hm)), margin=dict(t=20, b=10))
+                st.plotly_chart(heat, use_container_width=True)
+                # Sector drill-down
+                sec_pick = st.selectbox("Show stocks in sector", sorted(allc["Sector"].unique()))
+                st.dataframe(allc[allc["Sector"] == sec_pick][
+                    ["Symbol", "Company", "Classification", "Score", "RSI 14",
+                     "Volume Ratio", "Relative Strength %", "Breakout Status"]],
+                    use_container_width=True, height=320)
 
-    # 7) Claude Review
+    # =====================================================================
+    # 6) MOMENTUM MAP
+    # =====================================================================
+    with tabs[5]:
+        if allc.empty:
+            st.info("Run a scan that produces classified stocks to view maps.")
+        else:
+            st.plotly_chart(px.scatter(
+                allc, x="Relative Strength %", y="Score", size="Volume Ratio",
+                color="Classification", color_discrete_map=CLASS_COLORS, hover_name="Symbol",
+                hover_data=["Company", "Sector", "RSI 14", "ADX 14",
+                            "Distance from 52W High %", "Risk Level"],
+                title="Momentum vs Strength (bubble = volume)", size_max=28),
+                use_container_width=True)
+            st.plotly_chart(px.scatter(
+                allc, x="Distance from 52W High %", y="Volume Ratio", size="Score",
+                color="Classification", color_discrete_map=CLASS_COLORS, hover_name="Symbol",
+                title="Breakout readiness (closer to 0 on X = nearer 52W high)", size_max=28),
+                use_container_width=True)
+            # Overextension
+            overext = allc[(allc["Distance from 20 DMA %"] > 10) |
+                           (allc["Distance from 200 DMA %"] > 40)].copy()
+            st.subheader("Overextended - avoid chasing")
+            if overext.empty:
+                st.success("No overextended stocks among classified names.")
+            else:
+                st.dataframe(overext[["Symbol", "Company", "Classification", "CMP",
+                                      "Distance from 20 DMA %", "Distance from 200 DMA %",
+                                      "Score", "Risk Level"]],
+                             use_container_width=True, height=300)
+
+    # =====================================================================
+    # 7) STOCK DEEP DIVE
+    # =====================================================================
     with tabs[6]:
-        st.subheader("Claude / ChatGPT Review Prompts")
-        st.write("**A. Strong Breakout review prompt:**")
-        st.text_area("Strong breakout prompt", scanner.build_strong_prompt(strong), height=260)
-        st.write("**B. Wait for Confirmation review prompt:**")
-        st.text_area("Wait for confirmation prompt", scanner.build_wait_prompt(wait), height=300)
+        if allc.empty:
+            st.info("Run a scan that produces classified stocks to deep-dive.")
+        else:
+            pick = st.selectbox("Select a stock", allc["Symbol"].tolist())
+            r = allc[allc["Symbol"] == pick].iloc[0]
+            cls = r["Classification"]
+            left, right = st.columns([1.2, 1])
+            with left:
+                st.markdown(
+                    f"### {r['Symbol']} — {r['Company']}\n"
+                    f"{badge(cls, CLASS_COLORS.get(cls, '#555'))} &nbsp; "
+                    f"{badge(r['Risk Level'], RISK_COLORS.get(r['Risk Level'], '#555'))}",
+                    unsafe_allow_html=True)
+                st.write(f"**Sector:** {r['Sector']}  |  **Score:** {r['Score']}  |  "
+                         f"**Remark:** {r['Final Remark']}")
+                # Decision box
+                msg = {"Strong Breakout / Actionable":
+                       ("success", "Actionable only after manual chart/news confirmation."),
+                       "Wait for Confirmation":
+                       ("warning", "Do not enter yet. Wait for the trigger condition."),
+                       "Early Watchlist": ("info", "Observe only.")}.get(cls, ("error", "Avoid for now."))
+                getattr(st, msg[0])(msg[1])
+            with right:
+                st.plotly_chart(score_gauge(r["Score"]), use_container_width=True)
+            # Indicator cards
+            ic = st.columns(7)
+            for col, lbl, key in zip(ic,
+                ["RSI", "ADX", "Vol Ratio", "Rel Str %", "Dist 52WH %", "Dist 200 %", "Risk/Reward"],
+                ["RSI 14", "ADX 14", "Volume Ratio", "Relative Strength %",
+                 "Distance from 52W High %", "Distance from 200 DMA %", "Risk Reward"]):
+                metric_card(col, lbl, r.get(key, "-"), "#37474f")
+            st.write(f"Trigger: {r['Trigger Price']} | Alert: {r['Suggested Alert Price']} "
+                     f"| Invalidation/SL: {r['Invalidation Level']}")
+            make_stock_chart(f"{pick}.NS", period, trigger=r.get("Trigger Price"),
+                             invalidation=r.get("Invalidation Level"))
 
-    # 8) Export
+    # =====================================================================
+    # 8) REJECTED / FAILED
+    # =====================================================================
     with tabs[7]:
+        if rejected is not None and not rejected.empty and "Reason" in rejected:
+            rc = rejected["Reason"].value_counts().reset_index()
+            rc.columns = ["Reason", "Count"]
+            st.plotly_chart(px.bar(rc, x="Count", y="Reason", orientation="h",
+                                   title="Why stocks were rejected",
+                                   color_discrete_sequence=["#8b1e1e"]), use_container_width=True)
+            with st.expander("Rejected table"):
+                st.dataframe(rejected, use_container_width=True, height=400)
+        else:
+            st.info("No rejected stocks.")
+        st.subheader("Failed tickers (download error / no data)")
+        if failed:
+            st.dataframe(pd.DataFrame({"Failed Tickers": failed}), use_container_width=True, height=240)
+        else:
+            st.success("No failed tickers.")
+
+    # =====================================================================
+    # 9) CLAUDE REVIEW
+    # =====================================================================
+    with tabs[8]:
+        st.subheader("A. Strong Breakout review prompt")
+        st.caption("Click the copy icon at the top-right of the box.")
+        st.code(scanner.build_strong_prompt(strong), language="text")
+        st.subheader("B. Wait for Confirmation review prompt")
+        st.code(scanner.build_wait_prompt(wait), language="text")
+
+    # =====================================================================
+    # 10) EXPORT
+    # =====================================================================
+    with tabs[9]:
         st.subheader("Export results")
-        if st.button("Save Excel + CSVs to outputs/ folder"):
-            xlsx_path = export_outputs(result)
-            st.success(f"Saved Excel + CSV files to: {OUTPUTS_DIR}")
-            st.write(f"- Excel (7 sheets): {xlsx_path}")
+        overext = allc[(allc["Distance from 20 DMA %"] > 10) |
+                       (allc["Distance from 200 DMA %"] > 40)].copy() if not allc.empty else pd.DataFrame()
+        cexp = st.columns(2)
+        if cexp[0].button("Save full Excel + CSVs"):
+            p = export_outputs(result)
+            st.success(f"Saved: {p} (+ CSV files in outputs/)")
+        if cexp[1].button("Save dashboard_summary.xlsx"):
+            p = export_dashboard_summary(result, overext)
+            st.success(f"Saved: {p}")
         st.caption("On Streamlit Cloud the outputs/ folder is temporary - use the "
                    "download buttons below to save to your computer.")
         for label, df, fname in [
             ("Strong Breakout CSV", strong, "strong_breakout.csv"),
             ("Wait for Confirmation CSV", wait, "wait_for_confirmation.csv"),
             ("Early Watchlist CSV", watch, "early_watchlist.csv"),
-            ("Rejected CSV", rejected, "rejected_stocks.csv"),
-        ]:
+            ("Rejected CSV", rejected, "rejected_stocks.csv")]:
             if df is not None and not df.empty:
                 st.download_button(label, df.to_csv(index=False).encode("utf-8"),
                                    file_name=fname, mime="text/csv", key=fname)
 else:
+    st.title("NSE Momentum Breakout Dashboard")
     st.info("Set your options in the sidebar and click **Run Scan** to begin.")

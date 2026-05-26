@@ -64,9 +64,10 @@ To stop it, go back to the terminal and press **Ctrl + C**.
 4. Read the **summary cards** at the top: Total Scanned, Strong Breakout,
    Wait for Confirmation, Early Watchlist, Rejected, Market Regime,
    Top 3 Sectors, Failed Tickers.
-5. Review results in the tabs (explained in section 7 below):
-   **Strong Breakout · Wait for Confirmation · Early Watchlist · Rejected ·
-   Stock Chart · Sector Strength · Claude Review · Export**.
+5. Review results in the visual tabs (explained in section 7 below):
+   **Market Overview · Strong Breakout · Wait for Confirmation · Early Watchlist ·
+   Sector Dashboard · Momentum Map · Stock Deep Dive · Rejected / Failed ·
+   Claude Review · Export**.
 
 ---
 
@@ -111,18 +112,34 @@ Click **Save Excel + CSVs to outputs/ folder** in the Export tab to create:
 
 ---
 
-## 7. What each tab means
+## 7. The visual dashboard - what each tab means
+
+The app is a graphical dashboard. At the very top you always see a **header**
+(scan time, universe size, period, market-regime badge) and **six coloured
+summary cards** (Total Scanned, Strong Breakout, Wait for Confirmation, Early
+Watchlist, Rejected, Failed). Below that are the tabs:
 
 | Tab | What it shows |
 |-----|---------------|
-| **Strong Breakout** | Score >= 80 and all entry conditions met. The most "actionable" list. |
-| **Wait for Confirmation** | Score 65-79. The setup is developing but the breakout is **not confirmed yet**. Each row tells you exactly *what to wait for* and at *what price*. |
-| **Early Watchlist** | Score 55-64. Momentum is building but not ready. Keep on radar. |
-| **Rejected** | Failed a hard rule (below 200 DMA, falling 200 DMA, no retest, negative relative strength, weak volume) or scored below the minimum. |
-| **Stock Chart** | Candlestick + 20/50/200 DMA + 52W-high + trigger + invalidation lines, plus Volume, RSI and ADX panels. Shows a green/yellow box per classification. |
-| **Sector Strength** | Average 20-day return per sector. Top sectors get a small score bonus. |
-| **Claude Review** | Two ready-to-paste prompts (Strong + Wait) for a deeper AI review. |
-| **Export** | Save the Excel workbook + CSV files. |
+| **Market Overview** | Quick snapshot: classification donut, score-distribution bars, Nifty market-regime panel, and Top-10 charts by score and by relative strength. |
+| **Strong Breakout** | Score >= 80, all entry conditions met. Top-5 green cards, a ranking bar chart, a risk-vs-reward bubble chart, and a detailed table at the bottom. |
+| **Wait for Confirmation** | Score 65-79, breakout **not confirmed yet**. Orange cards, a "closest to trigger" chart, a "what are they waiting for" breakdown, and an alert watchlist table. |
+| **Early Watchlist** | Score 55-64. Momentum building but not ready. Blue cards + ranking chart. Observe only. |
+| **Sector Dashboard** | Sector strength bar chart, top-3 sector cards, a colour heatmap of avg score / breakouts / strength, and a sector drill-down. |
+| **Momentum Map** | Scatter maps: Momentum-vs-Strength and Breakout-readiness (bubble = volume/score), plus an "overextended - avoid chasing" list. |
+| **Stock Deep Dive** | Pick any stock: summary card, **score gauge**, full candlestick (20/50/200 DMA + 52W-high + trigger + stop lines + Volume/RSI/ADX), indicator cards, and a plain-English decision box. |
+| **Rejected / Failed** | A bar chart of *why* stocks were rejected, the rejected table, and the failed-tickers list. |
+| **Claude Review** | Two ready-to-paste prompts (Strong + Wait) with a one-click copy icon. |
+| **Export** | Save the full Excel workbook, the new `dashboard_summary.xlsx`, and per-category CSV files. |
+
+### How to interpret the charts
+- **Donut / summary cards** - how your universe split across the four buckets.
+- **Bar charts** (score, relative strength, distance-to-trigger) - longer/closer
+  to the top = stronger or nearer to action.
+- **Risk-vs-Reward bubble** - prefer points that are *high* (better reward per
+  unit risk) with a *green* colour (Low Risk); big bubbles = heavier volume.
+- **Momentum Map scatter** - top-right = strong momentum *and* beating the Nifty.
+- **Score gauge** (Deep Dive) - green zone (80-100) is the strongest, red (<55) weakest.
 
 ### What is "Wait for Confirmation"?
 These are good-but-not-yet-ready stocks. They have recovered above the 200 DMA
