@@ -66,8 +66,9 @@ To stop it, go back to the terminal and press **Ctrl + C**.
    Top 3 Sectors, Failed Tickers.
 5. Review results in the visual tabs (explained in section 7 below):
    **Market Overview · Sector Rotation · RS Leaders · Strong Breakout ·
-   Wait for Confirmation · Early Watchlist · Do Not Chase · Momentum Map ·
-   Stock Deep Dive · Rejected / Failed · Claude Review · Export**.
+   Wait for Confirmation · Coiled / Ready · Fresh Momentum · Early Watchlist ·
+   Do Not Chase · Momentum Map · Stock Deep Dive · Rejected / Failed ·
+   Claude Review · Export**.
 
 ---
 
@@ -126,13 +127,21 @@ Watchlist, Rejected, Failed). Below that are the tabs:
 | **RS Leaders** | Multi-timeframe **relative strength** leaders. `RS Score` (0-100) is the percentile rank of a stock's relative strength vs Nifty across 5D/20D/60D/120D/252D. An **RS Leader** has RS Score >= 80, positive RS on 20D & 60D, and price above its 50 & 200 DMA. |
 | **Strong Breakout** | Score >= 80, all entry conditions met. Top-5 green cards, a ranking bar chart, a risk-vs-reward bubble chart, and a detailed table at the bottom. |
 | **Wait for Confirmation** | Score 65-79, breakout **not confirmed yet**. Orange cards, a "closest to trigger" chart, a "what are they waiting for" breakdown, and an alert watchlist table. |
+| **Coiled / Ready** | Stocks **coiling** before a breakout: tight recent range + ATR contraction + volume dry-up while holding above 50/200 DMA near the 52W high. `Coiled Score` ranks them; "closest to trigger" shows which may pop first. *Preparing - do not enter until breakout with volume.* |
+| **Fresh Momentum** | Stocks **igniting a new move** (even if they never did a 200-DMA retest): Close > 20 > 50 > 200 DMA (rising), volume expansion, RSI 55-72, ADX confirming, at/near a 20-day high, RS Score >= 70. *Prefer entry on a small pullback or breakout sustain.* |
 | **Early Watchlist** | Score 55-64. Momentum building but not ready. Blue cards + ranking chart. Observe only. |
 | **Do Not Chase** | Stocks that may be strong but are **overextended** right now (too far above 20/50/200 DMA, RSI > 75, big gap up, or poor risk-reward). Each shows a `No Chase Reason` and a `Wait Condition` (e.g. "wait for pullback to 20 DMA"). Good stocks - just not a good *fresh entry* today. |
 | **Momentum Map** | Scatter maps: Momentum-vs-Strength and Breakout-readiness (bubble = volume/score), plus an "overextended - avoid chasing" list. |
 | **Stock Deep Dive** | Pick any stock: summary card, **Composite-Score gauge**, a score-breakdown bar (Trend / RS / Sector / Breakout / Pullback / Risk), full candlestick (20/50/100/200 DMA + 52W-high + trigger + stop lines + Volume/RSI/ADX), indicator cards, and a plain-English decision box. |
 | **Rejected / Failed** | A bar chart of *why* stocks were rejected, the rejected table, and the failed-tickers list. |
-| **Claude Review** | Two ready-to-paste prompts (Strong + Wait) with a one-click copy icon. |
-| **Export** | Save the full Excel workbook (now incl. RS_Leaders, Sector_Rotation, Do_Not_Chase, Failed_Tickers sheets), the `dashboard_summary.xlsx`, and per-category CSV files. |
+| **Claude Review** | Five ready-to-paste prompts (Elite/Actionable, Wait, Coiled, Fresh, Do Not Chase), each with the full context (composite, RS, sector, breakout, pullback, trigger, invalidation, risk) and a one-click copy icon. |
+| **Export** | Save the full Excel workbook (Elite_Momentum, Actionable_Breakout, Strong_Breakout, Wait_For_Confirmation, Coiled_Ready, Fresh_Momentum, Early_Watchlist, RS_Leaders, Sector_Rotation, Do_Not_Chase, Rejected, Failed_Tickers, Claude_Review sheets), the `dashboard_summary.xlsx`, and per-category CSV files. |
+
+**Pullback Quality** (also a Composite input): for any dip-and-recover, the app
+labels the **Pullback Type** (20/50/100 DMA Bounce, 200 DMA Retest, Broken 200 DMA
+Recovery, or No Valid Pullback) and scores it 0-100 on whether it respected a moving
+average, fell on lower volume than it recovered on, recovered quickly, had a
+controlled drawdown, and reclaimed the 20/50 DMA.
 
 ### Composite Momentum Score (the main score)
 Each stock now also gets a **Composite Momentum Score (0-100)** that blends five

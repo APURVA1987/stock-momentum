@@ -226,6 +226,51 @@ def compute_metrics(df: pd.DataFrame, nifty_returns: dict,
     risk = cmp - stop_used
     risk_reward = (target1 - cmp) / risk if risk > 0 else np.nan
 
+    # --- PHASE 2: Coiled / tightness metrics ---
+    def rng_pct(k):
+        seg = df.tail(k)
+        return (float(seg["High"].max()) - float(seg["Low"].min())) / cmp * 100 if cmp > 0 else np.nan
+    range_5d, range_10d, range_20d, range_60d = rng_pct(5), rng_pct(10), rng_pct(20), rng_pct(60)
+    atr50 = float(ind.atr(high, low, close, 50).iloc[-1])
+    atr_contraction = (atr14 / atr50) if (atr50 and atr50 > 0) else np.nan
+    avg_vol_10, avg_vol_50 = float(volume.tail(10).mean()), float(volume.tail(50).mean())
+    vol_dryup_10 = (avg_vol_10 / avg_vol_50) if avg_vol_50 > 0 else np.nan
+    lows10 = low.tail(10).values
+    higher_lows = int(sum(1 for i in range(1, len(lows10)) if lows10[i] > lows10[i - 1]))
+
+    # --- PHASE 2: Fresh momentum metrics ---
+    ma20_rising = bool(dma20.iloc[-1] > dma20.iloc[-6]) if dma20.notna().sum() > 6 else False
+    ma50_rising = bool(dma50.iloc[-1] > dma50.iloc[-11]) if dma50.notna().sum() > 11 else False
+    high_20d = float(high.tail(20).max())
+    near_20d_high = bool(cmp >= 0.98 * high_20d)
+    at_20d_high = bool(cmp >= high_20d * 0.999)
+    ma_aligned = bool(cmp > ma20 > ma50 > ma200)
+
+    # --- PHASE 2: Pullback analysis ---
+    lows_arr = recent["Low"].values
+    idx_min = int(np.argmin(lows_arr)) if len(lows_arr) else 0
+    fall_seg, rec_seg = recent.iloc[:idx_min + 1], recent.iloc[idx_min:]
+    vol_on_fall = float(fall_seg["Volume"].mean()) if len(fall_seg) else np.nan
+    vol_on_rec = float(rec_seg["Volume"].mean()) if len(rec_seg) else np.nan
+    recovery_speed = int(len(rec_seg) - 1)
+    pullback_duration = int(len(fall_seg) - 1)
+    drawdown_52w = (low_60 / high_52w - 1.0) * 100 if high_52w > 0 else np.nan
+
+    def gp(ma):
+        return (low_60 / ma - 1.0) if (ma and not np.isnan(ma) and ma > 0) else np.nan
+    cand = {"200 DMA Retest": gp(ma200), "100 DMA Bounce": gp(ma100),
+            "50 DMA Bounce": gp(ma50), "20 DMA Bounce": gp(ma20)}
+    ptype, best = "No Valid Pullback", None
+    for name, g in cand.items():
+        if g is None or np.isnan(g):
+            continue
+        if -0.03 <= g <= 0.05 and (best is None or abs(g) < abs(best[1])):
+            best = (name, g)
+    if best:
+        ptype = best[0]
+    elif days_below_200 > 0 and cmp > ma200:
+        ptype = "Broken 200 DMA Recovery"
+
     return {
         # display values (rounded)
         "CMP": round(cmp, 2), "20 DMA": round(ma20, 2), "50 DMA": round(ma50, 2),
@@ -260,8 +305,28 @@ def compute_metrics(df: pd.DataFrame, nifty_returns: dict,
         "Days Below 200 DMA": days_below_200,
         "Breakout Status": breakout_status,
         "Risk Reward": round(risk_reward, 2) if not np.isnan(risk_reward) else np.nan,
+        # Phase 2: coiled / fresh / pullback display values
+        "Range 5D %": round(range_5d, 2) if not np.isnan(range_5d) else np.nan,
+        "Range 10D %": round(range_10d, 2) if not np.isnan(range_10d) else np.nan,
+        "Range 20D %": round(range_20d, 2) if not np.isnan(range_20d) else np.nan,
+        "Range 60D %": round(range_60d, 2) if not np.isnan(range_60d) else np.nan,
+        "ATR 50": round(atr50, 2) if not np.isnan(atr50) else np.nan,
+        "ATR Contraction": round(atr_contraction, 2) if not np.isnan(atr_contraction) else np.nan,
+        "Volume Dryup 10D": round(vol_dryup_10, 2) if not np.isnan(vol_dryup_10) else np.nan,
+        "Higher Lows 10D": higher_lows,
+        "20D High": round(high_20d, 2),
+        "Pullback Type": ptype,
+        "Pullback Depth %": round(abs(drawdown_52w), 2) if not np.isnan(drawdown_52w) else np.nan,
+        "Pullback Duration Days": pullback_duration,
+        "Recovery Speed Days": recovery_speed,
         # booleans / raw values reused by scoring + trade plan
         "_retested": retested, "_volume_dryup": volume_dryup,
+        "_ma20_rising": ma20_rising, "_ma50_rising": ma50_rising,
+        "_near_20d_high": near_20d_high, "_at_20d_high": at_20d_high, "_ma_aligned": ma_aligned,
+        "_range10": range_10d, "_range60": range_60d, "_atr_contraction": atr_contraction,
+        "_vol_dryup10": vol_dryup_10, "_higher_lows": higher_lows,
+        "_vol_on_fall": vol_on_fall, "_vol_on_rec": vol_on_rec,
+        "_recovery_speed": recovery_speed, "_drawdown_52w": drawdown_52w, "_ptype": ptype,
         "_breakout_sustain": breakout_sustain,
         "_high_52w": high_52w, "_prev_52w_high": prev_52w_high,
         "_latest_high": latest_high, "_ma20": ma20, "_ma50": ma50, "_ma200": ma200,
@@ -410,6 +475,112 @@ def sector_status_from_score(v: float) -> str:
     if v >= 60: return "Improving"
     if v >= 40: return "Neutral"
     return "Weak"
+
+
+# --- PHASE 2: Coiled / tight setup (range contraction before a breakout) ---
+def coiled_score(m: dict, rs_score: float) -> tuple:
+    """Return (score 0-100, is_coiled bool). Higher = tighter & readier."""
+    r10, r60 = _f(m["_range10"], np.nan), _f(m["_range60"], np.nan)
+    tight_ratio = (r10 / r60) if (r60 and not np.isnan(r60) and r60 > 0) else np.nan
+    atrc = _f(m["_atr_contraction"], 99)
+    vdry = _f(m["_vol_dryup10"], 99)
+    d52 = _f(m["Distance from 52W High %"], -99)
+
+    sc = 0
+    # price tightness (25)
+    if not np.isnan(tight_ratio):
+        if tight_ratio <= 0.4: sc += 25
+        elif tight_ratio <= 0.6: sc += 18
+        elif tight_ratio <= 0.8: sc += 10
+    # ATR contraction (20)
+    if atrc < 0.70: sc += 20
+    elif atrc < 0.85: sc += 12
+    elif atrc < 1.0: sc += 5
+    # volume dry-up (20)
+    if vdry < 0.60: sc += 20
+    elif vdry < 0.80: sc += 12
+    elif vdry < 1.0: sc += 5
+    # RS score (20)
+    sc += round(_f(rs_score) / 100 * 20)
+    # near 52W high (15)
+    if d52 >= -3: sc += 15
+    elif d52 >= -7: sc += 10
+    elif d52 >= -10: sc += 5
+
+    is_coiled = bool(
+        m["CMP"] > m["50 DMA"] and m["CMP"] > m["200 DMA"] and d52 >= -10
+        and atrc < 0.85 and vdry < 0.80 and _f(rs_score) >= 65
+        and _f(m["Distance from 20 DMA %"]) <= 10
+        and (not np.isnan(tight_ratio) and tight_ratio <= 0.7))
+    return int(min(100, sc)), is_coiled
+
+
+# --- PHASE 2: Fresh momentum ignition (new move, may have skipped 200 DMA) ---
+def fresh_momentum_score(m: dict, rs_score: float) -> tuple:
+    cmp = m["CMP"]
+    vr = _f(m["Volume Ratio"])
+    rsi = _f(m["RSI 14"])
+    adx = _f(m["ADX 14"])
+    sc = 0
+    # MA alignment (25)
+    if cmp > m["20 DMA"] > m["50 DMA"] > m["200 DMA"]: sc += 25
+    elif cmp > m["50 DMA"] > m["200 DMA"]: sc += 12
+    # volume expansion (20)
+    if vr >= 1.5: sc += 20
+    elif vr >= 1.2: sc += 10
+    # RSI zone (15)
+    if 55 <= rsi <= 72: sc += 15
+    elif 50 <= rsi < 55 or 72 < rsi <= 78: sc += 7
+    # ADX / trend strength (15)
+    if adx > 25: sc += 15
+    elif adx > 20: sc += 10
+    elif adx > 15: sc += 5
+    # 20D breakout (15)
+    if m["_at_20d_high"]: sc += 15
+    elif m["_near_20d_high"]: sc += 8
+    # RS score (10)
+    sc += round(_f(rs_score) / 100 * 10)
+
+    is_fresh = bool(
+        m["_ma_aligned"] and m["_ma20_rising"] and m["_ma50_rising"] and vr >= 1.5
+        and 55 <= rsi <= 72 and (adx > 20 or m["_ma20_rising"]) and m["_near_20d_high"]
+        and _f(m["_rs20"]) > 0 and _f(rs_score) >= 70)
+    return int(min(100, sc)), is_fresh
+
+
+# --- PHASE 2: Pullback quality (how healthy was the dip-and-recover?) ---
+def pullback_quality(m: dict) -> tuple:
+    """Return (score 0-100, remark)."""
+    ptype = m["_ptype"]
+    vfall, vrec = _f(m["_vol_on_fall"], np.nan), _f(m["_vol_on_rec"], np.nan)
+    rec_days = _f(m["_recovery_speed"], 999)
+    depth = abs(_f(m["_drawdown_52w"], 99))
+    cmp = m["CMP"]
+
+    sc = 0
+    # respected a moving average (25)
+    if ptype in ("20 DMA Bounce", "50 DMA Bounce", "100 DMA Bounce", "200 DMA Retest"):
+        sc += 25
+    elif ptype == "Broken 200 DMA Recovery":
+        sc += 12
+    # fall volume lower than recovery volume (25)
+    if not np.isnan(vfall) and not np.isnan(vrec):
+        if vfall < vrec: sc += 25
+        elif vfall < vrec * 1.1: sc += 12
+    # quick recovery (20)
+    if rec_days <= 15: sc += 20
+    elif rec_days <= 30: sc += 12
+    elif rec_days <= 45: sc += 6
+    # controlled drawdown (15)
+    if depth <= 15: sc += 15
+    elif depth <= 25: sc += 8
+    # reclaimed 20/50 DMA (15)
+    if cmp > m["20 DMA"] and cmp > m["50 DMA"]: sc += 15
+    elif cmp > m["50 DMA"]: sc += 8
+
+    remark = (f"{ptype}; fall {'<' if (not np.isnan(vfall) and not np.isnan(vrec) and vfall < vrec) else '>='} "
+              f"recovery volume; recovered in ~{int(rec_days)}d; drawdown {round(depth, 1)}%")
+    return int(min(100, sc)), remark
 
 
 # -----------------------------------------------------------------------------
@@ -734,6 +905,7 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
     # PHASE D: composite momentum score + build rows + route
     # =========================================================================
     strong_rows, wait_rows, watch_rows, all_rows = [], [], [], []
+    coiled_rows, fresh_rows = [], []
     for s in stocks:
         m, comps, score = s["m"], s["comps"], s["score"]
         classification = s["classification"]
@@ -743,6 +915,10 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
         composite = int(round(0.25 * trend100 + 0.25 * s["rs_score"] + 0.20 * s["bq"]
                               + 0.15 * sec_sss + 0.15 * risk100))
         over, reasons, wait_cond = overextension(m)
+        # --- PHASE 2 engines ---
+        c_score, is_coiled = coiled_score(m, s["rs_score"])
+        f_score, is_fresh = fresh_momentum_score(m, s["rs_score"])
+        pq_score, pq_remark = pullback_quality(m)
         extra = {
             "RS Score": s["rs_score"], "RS Rank": s["rs_rank"],
             "RS Leader": "Yes" if s["rs_leader"] else "No",
@@ -760,11 +936,23 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
             "Overextended": "Yes" if over else "No",
             "No Chase Reason": "; ".join(reasons) if reasons else "-",
             "Wait Condition": wait_cond if over else "-",
+            # Phase 2 columns
+            "Coiled Score": c_score, "Coiled Ready": "Yes" if is_coiled else "No",
+            "Fresh Momentum Score": f_score, "Fresh Momentum": "Yes" if is_fresh else "No",
+            "Pullback Type": m["Pullback Type"], "Pullback Quality": pq_score,
+            "Pullback Remark": pq_remark,
+            "ATR Contraction": m["ATR Contraction"], "Volume Dryup 10D": m["Volume Dryup 10D"],
+            "Range 10D %": m["Range 10D %"], "20D High": m["20D High"],
+            "Pullback Depth %": m["Pullback Depth %"], "Recovery Speed Days": m["Recovery Speed Days"],
         }
         rowd = _build_row(s, m, score, comps, classification, sector_rank_map,
                           min_vol_ratio, regime)
         rowd.update(extra)
         all_rows.append(rowd)
+        if is_coiled:
+            coiled_rows.append(rowd)
+        if is_fresh:
+            fresh_rows.append(rowd)
 
         if classification == "Strong Breakout / Actionable":
             strong_rows.append(rowd)
@@ -792,11 +980,14 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
                        ["Composite Score", "Distance from 52W High %", "Relative Strength %"],
                        [False, True, False])
     watch_df = finalise(watch_rows, ["Composite Score"], [False])
+    coiled_df = finalise(coiled_rows, ["Coiled Score", "Distance from 52W High %"], [False, True])
+    fresh_df = finalise(fresh_rows, ["Fresh Momentum Score", "RS Score"], [False, False])
     all_df = finalise(all_rows, ["Composite Score"], [False])
     rejected_df = pd.DataFrame(rejected_rows)
 
     return {
         "strong": strong_df, "wait": wait_df, "watchlist": watch_df,
+        "coiled": coiled_df, "fresh": fresh_df,
         "rejected": rejected_df, "failed": failed,
         "all_stocks": all_df, "sector_rotation": sector_rotation,
         "sector_strength": sector_df, "top_sectors": top_sectors,
@@ -807,42 +998,69 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
 
 
 # -----------------------------------------------------------------------------
-# 9. CLAUDE / CHATGPT REVIEW PROMPTS (two separate prompts)
+# 9. CLAUDE / CHATGPT REVIEW PROMPTS
 # -----------------------------------------------------------------------------
-def build_strong_prompt(strong_df: pd.DataFrame) -> str:
-    intro = (
-        "Review these STRONG BREAKOUT NSE stocks from my 200 DMA retest momentum "
-        "scanner for IMMEDIATE 15-30 day swing trade suitability. Check latest news, "
-        "sector strength, result quality, technical structure, breakout validity, "
-        "support/resistance, and risk. Rank them from best to weakest.\n\n"
-    )
-    if strong_df is None or strong_df.empty:
-        return intro + "(No strong breakout stocks in this scan.)"
+_REVIEW_TASK = (
+    "Check latest news, results, sector strength, technical structure, "
+    "support/resistance, and whether this is suitable for a 15-30 day swing trade. "
+    "Do not recommend entry if the confirmation condition is not met. "
+    "Rank them from best to weakest.\n\n"
+)
+
+
+def _g(r, key, default="-"):
+    """Safe column getter for a row (works whether or not the column exists)."""
+    try:
+        v = r[key]
+        return default if (v is None or (isinstance(v, float) and np.isnan(v))) else v
+    except (KeyError, TypeError):
+        return default
+
+
+def build_review_prompt(df: pd.DataFrame, header: str) -> str:
+    """Generic review prompt: one rich line per stock with all key fields."""
+    intro = header + _REVIEW_TASK
+    if df is None or df.empty:
+        return intro + "(No stocks in this bucket for this scan.)"
     lines = []
-    for _, r in strong_df.iterrows():
+    for _, r in df.iterrows():
         lines.append(
-            f"- {r['Symbol']} ({r['Company']}, {r['Sector']}, {r['Market Cap Category']}): "
-            f"CMP {r['CMP']}, Score {r['Score']}, {r['Breakout Status']}, RSI {r['RSI 14']}, "
-            f"ADX {r['ADX 14']}, VolRatio {r['Volume Ratio']}, RelStr {r['Relative Strength %']}%, "
-            f"Risk {r['Risk Level']}")
+            f"- {_g(r, 'Symbol')} ({_g(r, 'Company')}, {_g(r, 'Sector')}): "
+            f"CMP {_g(r, 'CMP')}, Composite {_g(r, 'Composite Score')}, "
+            f"RS {_g(r, 'RS Score')}, Sector {_g(r, 'Sector Status')} "
+            f"({_g(r, 'Sector Strength Score')}), Breakout {_g(r, 'Breakout Status')} "
+            f"[{_g(r, 'Breakout Quality Status')}], Pullback {_g(r, 'Pullback Type')}, "
+            f"Confirmation: {_g(r, 'Confirmation Needed')}, Trigger {_g(r, 'Trigger Price')}, "
+            f"Invalidation {_g(r, 'Invalidation Level')}, Risk {_g(r, 'Risk Level')}")
     return intro + "\n".join(lines)
+
+
+# The five Phase-2 prompts -----------------------------------------------------
+def build_strong_prompt(strong_df: pd.DataFrame) -> str:
+    return build_review_prompt(
+        strong_df, "Review these ELITE / ACTIONABLE BREAKOUT NSE stocks for an "
+        "IMMEDIATE 15-30 day swing trade. ")
 
 
 def build_wait_prompt(wait_df: pd.DataFrame) -> str:
-    intro = (
-        "Review these WAIT-FOR-CONFIRMATION NSE stocks from my 200 DMA retest "
-        "momentum scanner. The setup is developing but the breakout is NOT yet "
-        "confirmed. For each, assess whether the confirmation condition is likely "
-        "to trigger and how to plan the trade. IMPORTANT: Do not recommend entry "
-        "unless the confirmation condition is met.\n\n"
-    )
-    if wait_df is None or wait_df.empty:
-        return intro + "(No wait-for-confirmation stocks in this scan.)"
-    lines = []
-    for _, r in wait_df.iterrows():
-        lines.append(
-            f"- {r['Symbol']} ({r['Company']}, {r['Sector']}): CMP {r['CMP']}, "
-            f"Trigger {r['Trigger Price']}, Confirmation: {r['Confirmation Needed']}, "
-            f"RSI {r['RSI 14']}, VolRatio {r['Volume Ratio']}, "
-            f"RelStr {r['Relative Strength %']}%, Risk {r['Risk Level']}")
-    return intro + "\n".join(lines)
+    return build_review_prompt(
+        wait_df, "Review these WAIT-FOR-CONFIRMATION NSE stocks. The setup is "
+        "developing but the breakout is NOT yet confirmed. ")
+
+
+def build_coiled_prompt(coiled_df: pd.DataFrame) -> str:
+    return build_review_prompt(
+        coiled_df, "Review these COILED / TIGHT NSE stocks that look like they are "
+        "preparing for a breakout (range contraction + volume dry-up). ")
+
+
+def build_fresh_prompt(fresh_df: pd.DataFrame) -> str:
+    return build_review_prompt(
+        fresh_df, "Review these FRESH MOMENTUM NSE stocks that appear to be starting "
+        "a new up-move. ")
+
+
+def build_donotchase_prompt(nc_df: pd.DataFrame) -> str:
+    return build_review_prompt(
+        nc_df, "Review these strong-but-OVEREXTENDED NSE stocks (Do Not Chase). "
+        "Assess where a lower-risk re-entry might appear. ")

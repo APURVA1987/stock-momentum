@@ -159,15 +159,26 @@ def export_outputs(result):
     sector, ctx = result["sector_strength"], result["nifty_context"]
     sector_rot = result.get("sector_rotation", pd.DataFrame())
     allst = result.get("all_stocks", pd.DataFrame())
-    # Derived sub-lists for the new sheets.
-    rs_leaders = (allst[allst.get("RS Leader") == "Yes"].sort_values("RS Score", ascending=False)
-                  if not allst.empty and "RS Leader" in allst else pd.DataFrame())
-    do_not_chase = (allst[allst.get("Overextended") == "Yes"].sort_values("Composite Score", ascending=False)
-                    if not allst.empty and "Overextended" in allst else pd.DataFrame())
+    coiled, fresh = result.get("coiled", pd.DataFrame()), result.get("fresh", pd.DataFrame())
+
+    def _sel(df, col, val, sort="Composite Score"):
+        if df is None or df.empty or col not in df:
+            return pd.DataFrame()
+        out = df[df[col] == val]
+        return out.sort_values(sort, ascending=False) if sort in out else out
+
+    rs_leaders = _sel(allst, "RS Leader", "Yes", sort="RS Score")
+    do_not_chase = _sel(allst, "Overextended", "Yes")
+    elite = _sel(allst, "Momentum Class", "Elite Momentum")
+    actionable = _sel(allst, "Momentum Class", "Actionable Breakout")
     xlsx_path = os.path.join(OUTPUTS_DIR, "scanner_output.xlsx")
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as w:
+        _x(elite).to_excel(w, "Elite_Momentum", index=False)
+        _x(actionable).to_excel(w, "Actionable_Breakout", index=False)
         _x(strong).to_excel(w, "Strong_Breakout", index=False)
         _x(wait).to_excel(w, "Wait_For_Confirmation", index=False)
+        _x(coiled).to_excel(w, "Coiled_Ready", index=False)
+        _x(fresh).to_excel(w, "Fresh_Momentum", index=False)
         _x(watch).to_excel(w, "Early_Watchlist", index=False)
         _x(rs_leaders).to_excel(w, "RS_Leaders", index=False)
         _x(sector_rot).to_excel(w, "Sector_Rotation", index=False)
@@ -181,9 +192,12 @@ def export_outputs(result):
             "Nifty 20-Day Return %": ctx.get("nifty_20d_return"),
             "Top 3 Sectors": ", ".join(result["top_sectors"]), "Scanned At": result["scanned_at"],
         }]).to_excel(w, "Market_Regime", index=False)
-        pd.DataFrame({"Prompt": [scanner.build_strong_prompt(strong),
-                                 scanner.build_wait_prompt(wait)]}).to_excel(w, "Claude_Review", index=False)
+        pd.DataFrame({"Prompt": [
+            scanner.build_strong_prompt(strong), scanner.build_wait_prompt(wait),
+            scanner.build_coiled_prompt(coiled), scanner.build_fresh_prompt(fresh),
+            scanner.build_donotchase_prompt(do_not_chase)]}).to_excel(w, "Claude_Review", index=False)
     for df, fn in [(strong, "strong_breakout.csv"), (wait, "wait_for_confirmation.csv"),
+                   (coiled, "coiled_ready.csv"), (fresh, "fresh_momentum.csv"),
                    (watch, "early_watchlist.csv"), (rs_leaders, "rs_leaders.csv"),
                    (sector_rot, "sector_rotation.csv"), (do_not_chase, "do_not_chase.csv"),
                    (rejected, "rejected_stocks.csv")]:
@@ -324,10 +338,13 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
 
     allstocks = result.get("all_stocks", pd.DataFrame())     # full universe incl. rejected
     sector_rot = result.get("sector_rotation", pd.DataFrame())
+    coiled = result.get("coiled", pd.DataFrame())
+    fresh = result.get("fresh", pd.DataFrame())
 
     # Name-keyed tabs (order can change without breaking the blocks below).
     tab_names = ["Market Overview", "Sector Rotation", "RS Leaders", "Strong Breakout",
-                 "Wait for Confirmation", "Early Watchlist", "Do Not Chase", "Momentum Map",
+                 "Wait for Confirmation", "Coiled / Ready", "Fresh Momentum",
+                 "Early Watchlist", "Do Not Chase", "Momentum Map",
                  "Stock Deep Dive", "Rejected / Failed", "Claude Review", "Export"]
     T = dict(zip(tab_names, st.tabs(tab_names)))
 
@@ -579,6 +596,64 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                              use_container_width=True, height=440)
 
     # =====================================================================
+    # COILED / READY (range contraction before a breakout)
+    # =====================================================================
+    with T["Coiled / Ready"]:
+        st.info("Preparing. Do not enter until breakout with volume.")
+        st.caption("Tight range + ATR contraction + volume dry-up while holding above "
+                   "50/200 DMA and near the 52W high. These are 'spring-loading'.")
+        if coiled is None or coiled.empty:
+            st.info("No coiled / tight setups with current settings.")
+        else:
+            cdf = coiled.copy()
+            cdf["Distance to Trigger %"] = ((cdf["Trigger Price"] / cdf["CMP"] - 1) * 100).round(2)
+            stock_cards(cdf, 5, "#6a1b9a", [
+                ("CMP", "CMP"), ("Coiled", "Coiled Score"), ("RS", "RS Score"),
+                ("ATR Contr", "ATR Contraction"), ("Vol Dryup", "Volume Dryup 10D"),
+                ("To 52WH %", "Distance from 52W High %"), ("Trigger", "Trigger Price")])
+            st.write("")
+            gc = st.columns(2)
+            gc[0].plotly_chart(px.bar(cdf.sort_values("Coiled Score").tail(20),
+                                      x="Coiled Score", y="Symbol", orientation="h",
+                                      title="Tightest coiled setups", color="Coiled Score",
+                                      color_continuous_scale="Purples"), use_container_width=True)
+            near = cdf.sort_values("Distance to Trigger %").head(15)
+            gc[1].plotly_chart(px.bar(near, x="Distance to Trigger %", y="Symbol", orientation="h",
+                                      title="Closest to breakout trigger",
+                                      color="Distance to Trigger %",
+                                      color_continuous_scale="Purples_r"), use_container_width=True)
+            ccols = ["Symbol", "Company", "Sector", "CMP", "Coiled Score", "ATR Contraction",
+                     "Volume Dryup 10D", "Range 10D %", "Distance from 52W High %",
+                     "Trigger Price", "Distance to Trigger %", "RS Score", "Risk Level"]
+            st.dataframe(cdf[[c for c in ccols if c in cdf.columns]],
+                         use_container_width=True, height=420)
+
+    # =====================================================================
+    # FRESH MOMENTUM (new ignition, may have skipped the 200 DMA retest)
+    # =====================================================================
+    with T["Fresh Momentum"]:
+        st.success("Fresh momentum. Prefer entry on a small pullback or breakout sustain.")
+        st.caption("Close > 20 > 50 > 200 DMA (rising), volume expansion, RSI 55-72, "
+                   "ADX confirming, at/near a 20-day high, RS Score >= 70.")
+        if fresh is None or fresh.empty:
+            st.info("No fresh momentum candidates with current settings.")
+        else:
+            stock_cards(fresh, 5, "#00897b", [
+                ("CMP", "CMP"), ("Fresh", "Fresh Momentum Score"), ("RSI", "RSI 14"),
+                ("ADX", "ADX 14"), ("Vol", "Volume Ratio"), ("20D High", "20D High"),
+                ("RS", "RS Score"), ("Risk", "Risk Level")])
+            st.write("")
+            st.plotly_chart(px.bar(fresh.sort_values("Fresh Momentum Score").tail(20),
+                                   x="Fresh Momentum Score", y="Symbol", orientation="h",
+                                   title="Top fresh momentum candidates",
+                                   color="Fresh Momentum Score", color_continuous_scale="Teal"),
+                            use_container_width=True)
+            fcols = ["Symbol", "Company", "Sector", "CMP", "Fresh Momentum Score", "RSI 14",
+                     "ADX 14", "Volume Ratio", "20D High", "RS Score", "Composite Score", "Risk Level"]
+            st.dataframe(fresh[[c for c in fcols if c in fresh.columns]],
+                         use_container_width=True, height=420)
+
+    # =====================================================================
     # 6) MOMENTUM MAP
     # =====================================================================
     with T["Momentum Map"]:
@@ -633,11 +708,17 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                     f"{r.get('Sector Status', '-')})  |  **Composite:** {r.get('Composite Score', '-')}  "
                     f"|  **Old Score:** {r['Score']}  |  **RS Score:** {r.get('RS Score', '-')}  "
                     f"|  **Breakout Quality:** {r.get('Breakout Quality', '-')} "
-                    f"({r.get('Breakout Quality Status', '-')})")
-                # Decision box (overextension takes priority, else momentum class)
+                    f"({r.get('Breakout Quality Status', '-')})  |  "
+                    f"**Pullback:** {r.get('Pullback Type', '-')} "
+                    f"(quality {r.get('Pullback Quality', '-')})")
+                # Decision box: Do Not Chase > Coiled > Fresh > Momentum Class.
                 if r.get("Overextended") == "Yes":
-                    st.error(f"Do Not Chase: good stock but overextended now. "
+                    st.error(f"Good stock may be overextended. Avoid fresh entry now. "
                              f"{r.get('Wait Condition', '')}")
+                elif r.get("Coiled Ready") == "Yes":
+                    st.warning("Coiled / Ready: preparing. Wait for breakout with volume.")
+                elif r.get("Fresh Momentum") == "Yes":
+                    st.success("Fresh momentum starting. Prefer small pullback or breakout sustain.")
                 else:
                     msg = {"Elite Momentum":
                            ("success", "Best quality momentum candidate. Still confirm chart/news."),
@@ -654,10 +735,10 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                                 use_container_width=True)
             # Score breakdown bar (each sub-score normalised to 0-100)
             breakdown = pd.DataFrame({
-                "Component": ["Trend", "RS", "Sector", "Breakout Quality", "Pullback", "Risk"],
+                "Component": ["Trend", "RS", "Sector", "Breakout Quality", "Pullback Quality", "Risk"],
                 "Score": [safe_num(r.get("Trend Score")) * 4, safe_num(r.get("RS Score")),
                           safe_num(r.get("Sector Strength Score")), safe_num(r.get("Breakout Quality")),
-                          safe_num(r.get("Pullback Score")) * 5,
+                          safe_num(r.get("Pullback Quality")),
                           safe_num(r.get("Risk Score")) * 100 / 15]})
             st.plotly_chart(px.bar(breakdown, x="Score", y="Component", orientation="h",
                                    range_x=[0, 100], title="Score breakdown (0-100 each)",
@@ -699,11 +780,20 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     # 9) CLAUDE REVIEW
     # =====================================================================
     with T["Claude Review"]:
-        st.subheader("A. Strong Breakout review prompt")
-        st.caption("Click the copy icon at the top-right of the box.")
+        st.caption("Click the copy icon at the top-right of each box, then paste into "
+                   "Claude or ChatGPT.")
+        do_not_chase = (allstocks[allstocks.get("Overextended") == "Yes"]
+                        if not allstocks.empty and "Overextended" in allstocks else pd.DataFrame())
+        st.subheader("1. Elite / Actionable Breakout")
         st.code(scanner.build_strong_prompt(strong), language="text")
-        st.subheader("B. Wait for Confirmation review prompt")
+        st.subheader("2. Wait for Confirmation")
         st.code(scanner.build_wait_prompt(wait), language="text")
+        st.subheader("3. Coiled / Ready")
+        st.code(scanner.build_coiled_prompt(coiled), language="text")
+        st.subheader("4. Fresh Momentum")
+        st.code(scanner.build_fresh_prompt(fresh), language="text")
+        st.subheader("5. Do Not Chase")
+        st.code(scanner.build_donotchase_prompt(do_not_chase), language="text")
 
     # =====================================================================
     # 10) EXPORT
@@ -724,6 +814,8 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         for label, df, fname in [
             ("Strong Breakout CSV", strong, "strong_breakout.csv"),
             ("Wait for Confirmation CSV", wait, "wait_for_confirmation.csv"),
+            ("Coiled / Ready CSV", coiled, "coiled_ready.csv"),
+            ("Fresh Momentum CSV", fresh, "fresh_momentum.csv"),
             ("Early Watchlist CSV", watch, "early_watchlist.csv"),
             ("Rejected CSV", rejected, "rejected_stocks.csv")]:
             if df is not None and not df.empty:
