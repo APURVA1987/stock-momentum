@@ -141,6 +141,13 @@ Watchlist, Rejected, Failed). Below that are the tabs:
 | **Claude Review** | Five ready-to-paste prompts (Elite/Actionable, Wait, Coiled, Fresh, Do Not Chase), each with the full context (composite, RS, sector, breakout, pullback, trigger, invalidation, risk) and a one-click copy icon. |
 | **Export** | Save the full Excel workbook (Elite_Momentum, Actionable_Breakout, Strong_Breakout, Wait_For_Confirmation, Coiled_Ready, Fresh_Momentum, Early_Watchlist, RS_Leaders, Sector_Rotation, Do_Not_Chase, Rejected, Failed_Tickers, Claude_Review sheets), the `dashboard_summary.xlsx`, and per-category CSV files. |
 
+**Screener.in integration:** every shortlisted stock's symbol is a **clickable link**
+(cards show a link icon; tables have a "Screener" column) that opens its Screener.in
+page in a new tab. In **Stock Deep Dive**, click **Fetch fundamentals** to pull key
+ratios (Market Cap, P/E, Book Value, ROCE, ROE, Dividend Yield) on demand for that one
+stock. Fundamentals are fetched only for stocks you look at - never for the whole
+universe - and fail gracefully (showing "unavailable") if Screener blocks the request.
+
 **Pullback Quality** (also a Composite input): for any dip-and-recover, the app
 labels the **Pullback Type** (20/50/100 DMA Bounce, 200 DMA Retest, Broken 200 DMA
 Recovery, or No Valid Pullback) and scores it 0-100 on whether it respected a moving

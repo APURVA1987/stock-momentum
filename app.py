@@ -19,6 +19,7 @@ import streamlit as st
 
 import scanner
 import indicators as ind
+import fundamentals
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -70,6 +71,27 @@ def safe_num(v, default=0.0):
 @st.cache_data(show_spinner=False)
 def cached_history(symbol_ns: str, period: str) -> pd.DataFrame:
     return scanner.download_history(symbol_ns, period=period)
+
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def cached_fundamentals(symbol: str):
+    """Screener.in fundamentals for ONE symbol (cached for a day)."""
+    return fundamentals.get_fundamentals(symbol)
+
+
+# Streamlit column config that turns a "Screener" URL column into a clickable link.
+SCREENER_COLCFG = {"Screener": st.column_config.LinkColumn("Screener", display_text="open")}
+
+
+def df_with_links(df: pd.DataFrame, cols, height=420):
+    """Show a table with a clickable Screener link as the first column."""
+    if df is None or df.empty:
+        st.info("No rows.")
+        return
+    d = df.copy()
+    d["Screener"] = d["Symbol"].map(fundamentals.screener_url)
+    show = ["Screener"] + [c for c in cols if c in d.columns]
+    st.dataframe(d[show], use_container_width=True, height=height, column_config=SCREENER_COLCFG)
 
 
 def load_universe(uploaded_file) -> pd.DataFrame:
@@ -307,10 +329,13 @@ def stock_cards(df, n, accent, fields):
         body = "".join(
             f"<div style='font-size:12px'><b>{lbl}:</b> {r.get(c, '-')}</div>"
             for lbl, c in fields)
+        url = fundamentals.screener_url(r["Symbol"])
         cols[i % len(cols)].markdown(
             f"<div style='border:2px solid {accent};border-radius:12px;padding:10px;"
             f"margin-bottom:8px;background:rgba(255,255,255,0.03)'>"
-            f"<div style='font-size:17px;font-weight:700'>{r['Symbol']}</div>"
+            f"<div style='font-size:17px;font-weight:700'>"
+            f"<a href='{url}' target='_blank' style='color:inherit;text-decoration:none'>"
+            f"{r['Symbol']} &#128279;</a></div>"
             f"<div style='font-size:11px;opacity:.8;margin-bottom:6px'>{r['Company']}</div>"
             f"{body}</div>", unsafe_allow_html=True)
 
@@ -459,7 +484,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                               use_container_width=True)
             # D. Detailed table
             with st.expander("Detailed table"):
-                st.dataframe(strong, use_container_width=True, height=420)
+                df_with_links(strong, list(strong.columns), height=420)
 
     # =====================================================================
     # 3) WAIT FOR CONFIRMATION
@@ -500,8 +525,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                           "Score", "Risk Level"]
             tbl = wd.sort_values(["Distance to Trigger %", "Score", "Relative Strength %"],
                                  ascending=[True, False, False])
-            st.dataframe(tbl[[c for c in alert_cols if c in tbl.columns]],
-                         use_container_width=True, height=420)
+            df_with_links(tbl, alert_cols, height=420)
 
     # =====================================================================
     # 4) EARLY WATCHLIST
@@ -585,8 +609,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
             rs_cols = ["Symbol", "Company", "Sector", "Classification", "RS Leader", "RS Score",
                        "RS 5D %", "RS 20D %", "RS 60D %", "RS 120D %", "RS 252D %", "CMP",
                        "Distance from 52W High %", "Composite Score"]
-            st.dataframe(rs[[c for c in rs_cols if c in rs.columns]],
-                         use_container_width=True, height=460)
+            df_with_links(rs, rs_cols, height=460)
 
     # =====================================================================
     # DO NOT CHASE (strong but overextended - bad fresh entry)
@@ -644,8 +667,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
             ccols = ["Symbol", "Company", "Sector", "CMP", "Coiled Score", "ATR Contraction",
                      "Volume Dryup 10D", "Range 10D %", "Distance from 52W High %",
                      "Trigger Price", "Distance to Trigger %", "RS Score", "Risk Level"]
-            st.dataframe(cdf[[c for c in ccols if c in cdf.columns]],
-                         use_container_width=True, height=420)
+            df_with_links(cdf, ccols, height=420)
 
     # =====================================================================
     # FRESH MOMENTUM (new ignition, may have skipped the 200 DMA retest)
@@ -669,8 +691,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                             use_container_width=True)
             fcols = ["Symbol", "Company", "Sector", "CMP", "Fresh Momentum Score", "RSI 14",
                      "ADX 14", "Volume Ratio", "20D High", "RS Score", "Composite Score", "Risk Level"]
-            st.dataframe(fresh[[c for c in fcols if c in fresh.columns]],
-                         use_container_width=True, height=420)
+            df_with_links(fresh, fcols, height=420)
 
     # =====================================================================
     # 6) MOMENTUM MAP
@@ -774,6 +795,29 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                      f"| Invalidation/SL: {r['Invalidation Level']}")
             make_stock_chart(f"{pick}.NS", period, trigger=r.get("Trigger Price"),
                              invalidation=r.get("Invalidation Level"))
+
+            # --- Fundamentals from Screener.in (on demand, for this one stock) ---
+            st.markdown(f"#### Fundamentals "
+                        f"&nbsp;[Open on Screener.in &#128279;]({fundamentals.screener_url(pick)})")
+            with st.expander("Load key fundamentals from Screener.in", expanded=False):
+                if st.button("Fetch fundamentals", key=f"fund_{pick}"):
+                    with st.spinner("Fetching from Screener.in ..."):
+                        fund = cached_fundamentals(pick)
+                    if not fund:
+                        st.info("Fundamentals unavailable (Screener may be blocking this "
+                                "server, or the symbol differs on Screener). Use the link above.")
+                    else:
+                        # Show the headline ratios as cards, rest as a small table.
+                        keys = [k for k in fund if k != "_url"]
+                        headline = [k for k in ["Market Cap", "Current Price", "Stock P/E",
+                                                "Book Value", "ROCE", "ROE", "Dividend Yield",
+                                                "Face Value"] if k in fund]
+                        fcols = st.columns(min(4, max(1, len(headline))))
+                        for j, k in enumerate(headline):
+                            metric_card(fcols[j % len(fcols)], k, fund[k], "#37474f")
+                        st.dataframe(pd.DataFrame(
+                            [{"Ratio": k, "Value": fund[k]} for k in keys]),
+                            use_container_width=True, hide_index=True)
 
     # =====================================================================
     # 8) REJECTED / FAILED

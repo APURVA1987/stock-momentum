@@ -7,3 +7,5 @@ yfinance
 plotly
 openpyxl
 tqdm
+requests
+beautifulsoup4
