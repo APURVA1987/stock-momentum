@@ -99,8 +99,10 @@ def classified_all(result) -> pd.DataFrame:
 # -----------------------------------------------------------------------------
 st.sidebar.header("Scan Settings")
 uploaded = st.sidebar.file_uploader("Upload universe.csv (optional)", type=["csv"])
-cap_choice = st.sidebar.selectbox("Market cap category",
-                                  ["Both", "Large Cap only", "Mid Cap only"])
+cap_choice = st.sidebar.selectbox(
+    "Market cap category",
+    ["All", "Large Cap only", "Mid Cap only", "Small Cap only",
+     "Large + Mid", "Mid + Small"])
 period = st.sidebar.selectbox("Data period", ["5y", "3y", "2y"], index=0)
 retest_window = st.sidebar.number_input("Retest window (days)", 20, 120, 60, 5)
 retest_tol = st.sidebar.number_input("200 DMA retest tolerance %", 1.0, 15.0, 7.0, 0.5)
@@ -111,11 +113,18 @@ run_clicked = st.sidebar.button("Run Scan", type="primary")
 
 
 def filter_by_cap(df, choice):
+    cat = df["market_cap_category"].str.strip().str.lower()
     if choice == "Large Cap only":
-        return df[df["market_cap_category"].str.strip().str.lower() == "large cap"]
+        return df[cat == "large cap"]
     if choice == "Mid Cap only":
-        return df[df["market_cap_category"].str.strip().str.lower() == "mid cap"]
-    return df
+        return df[cat == "mid cap"]
+    if choice == "Small Cap only":
+        return df[cat == "small cap"]
+    if choice == "Large + Mid":
+        return df[cat.isin(["large cap", "mid cap"])]
+    if choice == "Mid + Small":
+        return df[cat.isin(["mid cap", "small cap"])]
+    return df   # "All"
 
 
 if run_clicked:
@@ -150,7 +159,29 @@ if run_clicked:
 # EXPORT (existing system kept; plus new dashboard_summary.xlsx)
 # =============================================================================
 def _x(df):
-    return df if (df is not None and not df.empty) else pd.DataFrame()
+    """Empty buckets get a one-row placeholder so the Excel sheet is never a
+    zero-column sheet (which crashes openpyxl on save)."""
+    return df if (df is not None and not df.empty) else pd.DataFrame({"Info": ["No stocks in this bucket"]})
+
+
+def _write_workbook(path, sheets: dict):
+    """Write an ordered {sheet_name: df} mapping to one .xlsx.
+
+    Uses keyword `sheet_name=` (required by pandas 3.x, where it is keyword-only)
+    and forces a visible active sheet before save — this avoids the
+    'At least one sheet must be visible' IndexError seen with openpyxl + pandas 3.
+    """
+    with pd.ExcelWriter(path, engine="openpyxl") as w:
+        for name, df in sheets.items():
+            _x(df).to_excel(w, sheet_name=name, index=False)
+        try:
+            if getattr(w, "book", None) is not None and len(w.book.worksheets):
+                for ws in w.book.worksheets:
+                    ws.sheet_state = "visible"
+                w.book.active = 0
+        except Exception:
+            pass
+    return path
 
 
 def export_outputs(result):
@@ -171,31 +202,24 @@ def export_outputs(result):
     do_not_chase = _sel(allst, "Overextended", "Yes")
     elite = _sel(allst, "Momentum Class", "Elite Momentum")
     actionable = _sel(allst, "Momentum Class", "Actionable Breakout")
-    xlsx_path = os.path.join(OUTPUTS_DIR, "scanner_output.xlsx")
-    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as w:
-        _x(elite).to_excel(w, "Elite_Momentum", index=False)
-        _x(actionable).to_excel(w, "Actionable_Breakout", index=False)
-        _x(strong).to_excel(w, "Strong_Breakout", index=False)
-        _x(wait).to_excel(w, "Wait_For_Confirmation", index=False)
-        _x(coiled).to_excel(w, "Coiled_Ready", index=False)
-        _x(fresh).to_excel(w, "Fresh_Momentum", index=False)
-        _x(watch).to_excel(w, "Early_Watchlist", index=False)
-        _x(rs_leaders).to_excel(w, "RS_Leaders", index=False)
-        _x(sector_rot).to_excel(w, "Sector_Rotation", index=False)
-        _x(do_not_chase).to_excel(w, "Do_Not_Chase", index=False)
-        _x(rejected).to_excel(w, "Rejected", index=False)
-        pd.DataFrame({"Failed Tickers": result["failed"]}).to_excel(w, "Failed_Tickers", index=False)
-        _x(sector).to_excel(w, "Sector_Strength", index=False)
-        pd.DataFrame([{
-            "Market Regime": result["regime"], "Nifty Close": ctx.get("nifty_close"),
-            "Nifty 50 DMA": ctx.get("nifty_50dma"), "Nifty 200 DMA": ctx.get("nifty_200dma"),
-            "Nifty 20-Day Return %": ctx.get("nifty_20d_return"),
-            "Top 3 Sectors": ", ".join(result["top_sectors"]), "Scanned At": result["scanned_at"],
-        }]).to_excel(w, "Market_Regime", index=False)
-        pd.DataFrame({"Prompt": [
-            scanner.build_strong_prompt(strong), scanner.build_wait_prompt(wait),
-            scanner.build_coiled_prompt(coiled), scanner.build_fresh_prompt(fresh),
-            scanner.build_donotchase_prompt(do_not_chase)]}).to_excel(w, "Claude_Review", index=False)
+    market = pd.DataFrame([{
+        "Market Regime": result["regime"], "Nifty Close": ctx.get("nifty_close"),
+        "Nifty 50 DMA": ctx.get("nifty_50dma"), "Nifty 200 DMA": ctx.get("nifty_200dma"),
+        "Nifty 20-Day Return %": ctx.get("nifty_20d_return"),
+        "Top 3 Sectors": ", ".join(result["top_sectors"]), "Scanned At": result["scanned_at"]}])
+    claude = pd.DataFrame({"Prompt": [
+        scanner.build_strong_prompt(strong), scanner.build_wait_prompt(wait),
+        scanner.build_coiled_prompt(coiled), scanner.build_fresh_prompt(fresh),
+        scanner.build_donotchase_prompt(do_not_chase)]})
+
+    xlsx_path = _write_workbook(os.path.join(OUTPUTS_DIR, "scanner_output.xlsx"), {
+        "Elite_Momentum": elite, "Actionable_Breakout": actionable,
+        "Strong_Breakout": strong, "Wait_For_Confirmation": wait,
+        "Coiled_Ready": coiled, "Fresh_Momentum": fresh, "Early_Watchlist": watch,
+        "RS_Leaders": rs_leaders, "Sector_Rotation": sector_rot,
+        "Do_Not_Chase": do_not_chase, "Rejected": rejected,
+        "Failed_Tickers": pd.DataFrame({"Failed Tickers": result["failed"]}),
+        "Sector_Strength": sector, "Market_Regime": market, "Claude_Review": claude})
     for df, fn in [(strong, "strong_breakout.csv"), (wait, "wait_for_confirmation.csv"),
                    (coiled, "coiled_ready.csv"), (fresh, "fresh_momentum.csv"),
                    (watch, "early_watchlist.csv"), (rs_leaders, "rs_leaders.csv"),
@@ -209,22 +233,17 @@ def export_outputs(result):
 def export_dashboard_summary(result, overext):
     """New optional workbook with the most useful at-a-glance sheets."""
     strong, wait = result["strong"], result["wait"]
-    path = os.path.join(OUTPUTS_DIR, "dashboard_summary.xlsx")
     summary = pd.DataFrame([{
         "Scanned At": result["scanned_at"], "Universe": result.get("universe_count"),
         "Market Regime": result["regime"], "Strong Breakout": len(strong),
         "Wait for Confirmation": len(wait), "Early Watchlist": len(result["watchlist"]),
         "Rejected": len(result["rejected"]), "Failed": len(result["failed"]),
-        "Top 3 Sectors": ", ".join(result["top_sectors"]),
-    }])
-    with pd.ExcelWriter(path, engine="openpyxl") as w:
-        summary.to_excel(w, "Dashboard_Summary", index=False)
-        (result["sector_strength"] if not result["sector_strength"].empty else pd.DataFrame()
-         ).to_excel(w, "Sector_Strength", index=False)
-        (strong.head(10) if not strong.empty else pd.DataFrame()).to_excel(w, "Top_10_Strong", index=False)
-        (wait.head(10) if not wait.empty else pd.DataFrame()).to_excel(w, "Top_10_Wait_For_Confirmation", index=False)
-        (overext if not overext.empty else pd.DataFrame()).to_excel(w, "Overextended_Stocks", index=False)
-    return path
+        "Top 3 Sectors": ", ".join(result["top_sectors"])}])
+    return _write_workbook(os.path.join(OUTPUTS_DIR, "dashboard_summary.xlsx"), {
+        "Dashboard_Summary": summary, "Sector_Strength": result["sector_strength"],
+        "Top_10_Strong": strong.head(10) if not strong.empty else pd.DataFrame(),
+        "Top_10_Wait_For_Confirmation": wait.head(10) if not wait.empty else pd.DataFrame(),
+        "Overextended_Stocks": overext})
 
 
 # =============================================================================
@@ -804,11 +823,17 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                        (allc["Distance from 200 DMA %"] > 40)].copy() if not allc.empty else pd.DataFrame()
         cexp = st.columns(2)
         if cexp[0].button("Save full Excel + CSVs"):
-            p = export_outputs(result)
-            st.success(f"Saved: {p} (+ CSV files in outputs/)")
+            try:
+                p = export_outputs(result)
+                st.success(f"Saved: {p} (+ CSV files in outputs/)")
+            except Exception as e:
+                st.error(f"Excel export failed: {e}. Use the CSV download buttons below instead.")
         if cexp[1].button("Save dashboard_summary.xlsx"):
-            p = export_dashboard_summary(result, overext)
-            st.success(f"Saved: {p}")
+            try:
+                p = export_dashboard_summary(result, overext)
+                st.success(f"Saved: {p}")
+            except Exception as e:
+                st.error(f"Export failed: {e}. Use the CSV download buttons below instead.")
         st.caption("On Streamlit Cloud the outputs/ folder is temporary - use the "
                    "download buttons below to save to your computer.")
         for label, df, fname in [

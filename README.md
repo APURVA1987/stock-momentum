@@ -55,7 +55,8 @@ To stop it, go back to the terminal and press **Ctrl + C**.
 ## 3. How to use it
 
 1. In the **left sidebar**, choose:
-   - Market cap category: Large Cap only / Mid Cap only / Both
+   - Market cap category: All / Large Cap only / Mid Cap only / Small Cap only /
+     Large + Mid / Mid + Small  (the universe now includes ~70 small caps too)
    - Data period: 2y / 3y / 5y
    - Filter settings (retest window, RSI, volume ratio, minimum score)
 2. (Optional) Upload your own `universe.csv` from the sidebar.
