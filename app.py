@@ -131,6 +131,12 @@ retest_tol = st.sidebar.number_input("200 DMA retest tolerance %", 1.0, 15.0, 7.
 min_rsi = st.sidebar.number_input("Min RSI", 30.0, 90.0, 55.0, 1.0)
 min_vol_ratio = st.sidebar.number_input("Min volume ratio (strong breakout)", 1.0, 5.0, 1.5, 0.1)
 min_score = st.sidebar.number_input("Minimum score (below this = Rejected)", 0, 100, 55, 5)
+local_mode = st.sidebar.checkbox(
+    "Local mode (NSE bhavcopy + price cache)", value=False,
+    help="Only works when you run the app on your OWN PC. Reuses a local price "
+         "cache (fast repeat runs) and overlays the latest official NSE bhavcopy "
+         "day on top of Yahoo history. Leave OFF on Streamlit Cloud (NSE blocks "
+         "cloud servers).")
 run_clicked = st.sidebar.button("Run Scan", type="primary")
 
 
@@ -169,6 +175,7 @@ if run_clicked:
         universe, period=period, retest_window=int(retest_window),
         retest_tol=float(retest_tol), min_rsi=float(min_rsi),
         min_vol_ratio=float(min_vol_ratio), min_score=int(min_score),
+        local_mode=bool(local_mode),
         progress_callback=on_progress,
     )
     progress.empty()

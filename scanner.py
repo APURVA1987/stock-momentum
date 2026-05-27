@@ -19,6 +19,8 @@
 # -----------------------------------------------------------------------------
 
 import datetime as dt
+import os
+import pickle
 import time
 
 import numpy as np
@@ -26,6 +28,9 @@ import pandas as pd
 import yfinance as yf
 
 import indicators as ind
+
+# Folder for the optional LOCAL price cache (used only in "local mode").
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 
 NIFTY_SYMBOL = "^NSEI"   # Yahoo symbol for Nifty 50 (used for relative strength)
@@ -137,6 +142,99 @@ def download_batch(symbols, period: str = "5y", chunk: int = 50, retries: int = 
         if progress:
             progress(done, total)
     return out
+
+
+# -----------------------------------------------------------------------------
+# LOCAL PRICE CACHE + HYBRID DOWNLOAD (Yahoo history + bhavcopy latest day)
+# -----------------------------------------------------------------------------
+def _cache_path(period):
+    return os.path.join(DATA_DIR, f"price_cache_{period}.pkl")
+
+
+def load_price_cache(period: str) -> dict:
+    """Load the local {symbol: DataFrame} cache, or {} if none/unreadable."""
+    p = _cache_path(period)
+    if os.path.exists(p):
+        try:
+            with open(p, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_price_cache(period: str, data: dict):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(_cache_path(period), "wb") as f:
+            pickle.dump(data, f)
+    except Exception:
+        pass
+
+
+def _overlay_bhavcopy(data: dict, bc) -> int:
+    """Append/replace the latest official NSE day onto each Yahoo series.
+    Returns how many symbols were updated."""
+    if bc is None or bc.empty:
+        return 0
+    bdate = pd.Timestamp(bc["Date"].iloc[0]).normalize()
+    n = 0
+    for sym, df in data.items():
+        if sym not in bc.index or df is None or df.empty:
+            continue
+        row = bc.loc[sym]
+        if isinstance(row, pd.DataFrame):     # guard against duplicate symbols
+            row = row.iloc[0]
+        try:
+            vals = [float(row["Open"]), float(row["High"]), float(row["Low"]),
+                    float(row["Close"]), float(row["Volume"])]
+        except Exception:
+            continue
+        last = df.index[-1].normalize()
+        if bdate > last:                      # new day -> append
+            df.loc[bdate] = vals
+            n += 1
+        elif bdate == last:                   # same day -> replace with official
+            df.loc[df.index[-1], ["Open", "High", "Low", "Close", "Volume"]] = vals
+            n += 1
+    return n
+
+
+def download_universe(symbols, period="5y", local_mode=False, progress=None) -> dict:
+    """Get OHLCV for the whole universe.
+
+    Default (cloud): batched Yahoo download for all symbols.
+    Local mode: reuse a local cache for fresh symbols (skipping Yahoo), download
+    only the stale/missing ones from Yahoo, then overlay the latest NSE bhavcopy
+    day, and save the cache. This makes repeated local daily runs fast and far
+    less dependent on Yahoo.
+    """
+    if not local_mode:
+        return download_batch(symbols, period=period, progress=progress)
+
+    cache = load_price_cache(period)
+    fresh_cutoff = pd.Timestamp.today().normalize() - pd.Timedelta(days=6)
+    data, need = {}, []
+    for s in symbols:
+        s = str(s).strip().upper()
+        df = cache.get(s)
+        if df is not None and not df.empty and df.index[-1].normalize() >= fresh_cutoff:
+            data[s] = df.copy()
+        else:
+            need.append(s)
+    if need:
+        data.update(download_batch(need, period=period, progress=progress))
+
+    # Overlay the latest official NSE close (local only).
+    try:
+        import bhavcopy
+        bc = bhavcopy.fetch_bhavcopy()
+        _overlay_bhavcopy(data, bc)
+    except Exception:
+        pass
+
+    save_price_cache(period, data)
+    return data
 
 
 def get_nifty_context(period: str = "5y") -> dict:
@@ -839,7 +937,8 @@ def _build_row(s, m, score, comps, classification, sector_rank_map, min_vol_rati
 def run_scan(universe_df: pd.DataFrame, period: str = "5y",
              retest_window: int = 60, retest_tol: float = 7.0,
              min_rsi: float = 55.0, min_vol_ratio: float = 1.5,
-             min_score: int = 55, progress_callback=None) -> dict:
+             min_score: int = 55, local_mode: bool = False,
+             progress_callback=None) -> dict:
     """Scan the whole universe and return categorised result tables."""
     ctx = get_nifty_context(period=period)
     nifty_20d = ctx["nifty_20d_return"]
@@ -860,7 +959,8 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
         if progress_callback:
             progress_callback(done, tot, "downloading market data (batched)")
 
-    data = download_batch(all_symbols, period=period, progress=_dl_progress)
+    data = download_universe(all_symbols, period=period, local_mode=local_mode,
+                             progress=_dl_progress)
 
     for i, row in enumerate(universe_df.itertuples(index=False), start=1):
         symbol = str(row.symbol).strip().upper()

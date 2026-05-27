@@ -11,6 +11,13 @@ Data source: **Yahoo Finance** via the `yfinance` library. Prices are downloaded
 only ~13 requests instead of one-per-stock - this avoids Yahoo rate-limits and keeps
 the scan fast.
 
+**Local mode (optional, your PC only):** tick **"Local mode (NSE bhavcopy + price
+cache)"** in the sidebar to (a) reuse a local price cache so repeat daily runs barely
+touch Yahoo, and (b) overlay the latest **official NSE bhavcopy** day on top of Yahoo's
+history. NSE blocks data-centre IPs, so this works only when you run the app on your own
+computer - leave it **OFF on Streamlit Cloud**. Yahoo still supplies the multi-year
+(split-adjusted) history; bhavcopy only refreshes the most recent trading day.
+
 ---
 
 ## 1. One-time setup (install Python packages)
