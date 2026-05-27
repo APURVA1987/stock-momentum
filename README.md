@@ -65,9 +65,9 @@ To stop it, go back to the terminal and press **Ctrl + C**.
    Wait for Confirmation, Early Watchlist, Rejected, Market Regime,
    Top 3 Sectors, Failed Tickers.
 5. Review results in the visual tabs (explained in section 7 below):
-   **Market Overview · Strong Breakout · Wait for Confirmation · Early Watchlist ·
-   Sector Dashboard · Momentum Map · Stock Deep Dive · Rejected / Failed ·
-   Claude Review · Export**.
+   **Market Overview · Sector Rotation · RS Leaders · Strong Breakout ·
+   Wait for Confirmation · Early Watchlist · Do Not Chase · Momentum Map ·
+   Stock Deep Dive · Rejected / Failed · Claude Review · Export**.
 
 ---
 
@@ -122,15 +122,46 @@ Watchlist, Rejected, Failed). Below that are the tabs:
 | Tab | What it shows |
 |-----|---------------|
 | **Market Overview** | Quick snapshot: classification donut, score-distribution bars, Nifty market-regime panel, and Top-10 charts by score and by relative strength. |
+| **Sector Rotation** | Which sectors are leading *now*. Top-sector cards, a sector-strength-score (0-100) bar, a colour heatmap (returns / RS / breadth), full table, and a sector drill-down. Each stock also gets a `Sector Status` of Leading / Improving / Neutral / Weak. |
+| **RS Leaders** | Multi-timeframe **relative strength** leaders. `RS Score` (0-100) is the percentile rank of a stock's relative strength vs Nifty across 5D/20D/60D/120D/252D. An **RS Leader** has RS Score >= 80, positive RS on 20D & 60D, and price above its 50 & 200 DMA. |
 | **Strong Breakout** | Score >= 80, all entry conditions met. Top-5 green cards, a ranking bar chart, a risk-vs-reward bubble chart, and a detailed table at the bottom. |
 | **Wait for Confirmation** | Score 65-79, breakout **not confirmed yet**. Orange cards, a "closest to trigger" chart, a "what are they waiting for" breakdown, and an alert watchlist table. |
 | **Early Watchlist** | Score 55-64. Momentum building but not ready. Blue cards + ranking chart. Observe only. |
-| **Sector Dashboard** | Sector strength bar chart, top-3 sector cards, a colour heatmap of avg score / breakouts / strength, and a sector drill-down. |
+| **Do Not Chase** | Stocks that may be strong but are **overextended** right now (too far above 20/50/200 DMA, RSI > 75, big gap up, or poor risk-reward). Each shows a `No Chase Reason` and a `Wait Condition` (e.g. "wait for pullback to 20 DMA"). Good stocks - just not a good *fresh entry* today. |
 | **Momentum Map** | Scatter maps: Momentum-vs-Strength and Breakout-readiness (bubble = volume/score), plus an "overextended - avoid chasing" list. |
-| **Stock Deep Dive** | Pick any stock: summary card, **score gauge**, full candlestick (20/50/200 DMA + 52W-high + trigger + stop lines + Volume/RSI/ADX), indicator cards, and a plain-English decision box. |
+| **Stock Deep Dive** | Pick any stock: summary card, **Composite-Score gauge**, a score-breakdown bar (Trend / RS / Sector / Breakout / Pullback / Risk), full candlestick (20/50/100/200 DMA + 52W-high + trigger + stop lines + Volume/RSI/ADX), indicator cards, and a plain-English decision box. |
 | **Rejected / Failed** | A bar chart of *why* stocks were rejected, the rejected table, and the failed-tickers list. |
 | **Claude Review** | Two ready-to-paste prompts (Strong + Wait) with a one-click copy icon. |
-| **Export** | Save the full Excel workbook, the new `dashboard_summary.xlsx`, and per-category CSV files. |
+| **Export** | Save the full Excel workbook (now incl. RS_Leaders, Sector_Rotation, Do_Not_Chase, Failed_Tickers sheets), the `dashboard_summary.xlsx`, and per-category CSV files. |
+
+### Composite Momentum Score (the main score)
+Each stock now also gets a **Composite Momentum Score (0-100)** that blends five
+engines: Trend 25% + RS Score 25% + Breakout Quality 20% + Sector Strength 15% +
+Risk Quality 15%. Its label (`Momentum Class`) is:
+**Elite Momentum (85+) · Actionable Breakout (75-85) · Wait for Confirmation
+(65-75) · Early Watchlist (55-65) · Ignore (<55)**. The original rule-based
+`Score` / classification is kept for reference and still drives the Strong /
+Wait / Early tabs.
+
+> Note: a stock can have a high Composite Score but still sit in **Rejected**,
+> because the rule classification requires the specific 200-DMA-retest setup
+> (e.g. a stock that never pulled back). Use **RS Leaders** and **Do Not Chase**
+> to find those strong-but-different names.
+
+### How to read RS, Sector and Do-Not-Chase together
+- **RS Leaders** = strongest stocks vs the market, any setup.
+- **Sector Rotation** = which *groups* money is flowing into.
+- A great candidate is an RS Leader, in a *Leading* sector, that is **not** in
+  Do Not Chase. If it is in Do Not Chase, wait for the stated condition.
+
+### Daily workflow
+1. **Run Scan** (~5 min).
+2. Check the **Market Regime** badge - if Weak, trade smaller / be selective.
+3. Open **Sector Rotation** - note the top 2-3 leading sectors.
+4. Open **RS Leaders** - the market's strongest names.
+5. Work the **Strong Breakout** -> **Wait for Confirmation** -> **Early Watchlist** tabs.
+6. Skip anything sitting in **Do Not Chase** until its wait condition is met.
+7. **Stock Deep Dive** the few names you like; then **Export** or use **Claude Review**.
 
 ### How to interpret the charts
 - **Donut / summary cards** - how your universe split across the four buckets.

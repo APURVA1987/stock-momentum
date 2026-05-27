@@ -149,17 +149,32 @@ if run_clicked:
 # =============================================================================
 # EXPORT (existing system kept; plus new dashboard_summary.xlsx)
 # =============================================================================
+def _x(df):
+    return df if (df is not None and not df.empty) else pd.DataFrame()
+
+
 def export_outputs(result):
     strong, wait = result["strong"], result["wait"]
     watch, rejected = result["watchlist"], result["rejected"]
     sector, ctx = result["sector_strength"], result["nifty_context"]
+    sector_rot = result.get("sector_rotation", pd.DataFrame())
+    allst = result.get("all_stocks", pd.DataFrame())
+    # Derived sub-lists for the new sheets.
+    rs_leaders = (allst[allst.get("RS Leader") == "Yes"].sort_values("RS Score", ascending=False)
+                  if not allst.empty and "RS Leader" in allst else pd.DataFrame())
+    do_not_chase = (allst[allst.get("Overextended") == "Yes"].sort_values("Composite Score", ascending=False)
+                    if not allst.empty and "Overextended" in allst else pd.DataFrame())
     xlsx_path = os.path.join(OUTPUTS_DIR, "scanner_output.xlsx")
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as w:
-        (strong if not strong.empty else pd.DataFrame()).to_excel(w, "Strong_Breakout", index=False)
-        (wait if not wait.empty else pd.DataFrame()).to_excel(w, "Wait_For_Confirmation", index=False)
-        (watch if not watch.empty else pd.DataFrame()).to_excel(w, "Early_Watchlist", index=False)
-        (rejected if not rejected.empty else pd.DataFrame()).to_excel(w, "Rejected", index=False)
-        (sector if not sector.empty else pd.DataFrame()).to_excel(w, "Sector_Strength", index=False)
+        _x(strong).to_excel(w, "Strong_Breakout", index=False)
+        _x(wait).to_excel(w, "Wait_For_Confirmation", index=False)
+        _x(watch).to_excel(w, "Early_Watchlist", index=False)
+        _x(rs_leaders).to_excel(w, "RS_Leaders", index=False)
+        _x(sector_rot).to_excel(w, "Sector_Rotation", index=False)
+        _x(do_not_chase).to_excel(w, "Do_Not_Chase", index=False)
+        _x(rejected).to_excel(w, "Rejected", index=False)
+        pd.DataFrame({"Failed Tickers": result["failed"]}).to_excel(w, "Failed_Tickers", index=False)
+        _x(sector).to_excel(w, "Sector_Strength", index=False)
         pd.DataFrame([{
             "Market Regime": result["regime"], "Nifty Close": ctx.get("nifty_close"),
             "Nifty 50 DMA": ctx.get("nifty_50dma"), "Nifty 200 DMA": ctx.get("nifty_200dma"),
@@ -169,7 +184,9 @@ def export_outputs(result):
         pd.DataFrame({"Prompt": [scanner.build_strong_prompt(strong),
                                  scanner.build_wait_prompt(wait)]}).to_excel(w, "Claude_Review", index=False)
     for df, fn in [(strong, "strong_breakout.csv"), (wait, "wait_for_confirmation.csv"),
-                   (watch, "early_watchlist.csv"), (rejected, "rejected_stocks.csv")]:
+                   (watch, "early_watchlist.csv"), (rs_leaders, "rs_leaders.csv"),
+                   (sector_rot, "sector_rotation.csv"), (do_not_chase, "do_not_chase.csv"),
+                   (rejected, "rejected_stocks.csv")]:
         if df is not None and not df.empty:
             df.to_csv(os.path.join(OUTPUTS_DIR, fn), index=False)
     return xlsx_path
@@ -206,6 +223,7 @@ def make_stock_chart(symbol_ns, period, trigger=None, invalidation=None):
         return
     close = df["Close"]
     dma20, dma50, dma200 = ind.sma(close, 20), ind.sma(close, 50), ind.sma(close, 200)
+    dma100 = ind.sma(close, 100)
     rsi14 = ind.rsi(close, 14)
     adx14 = ind.adx(df["High"], df["Low"], close, 14)
     high_52w = close.tail(252).max()
@@ -216,6 +234,7 @@ def make_stock_chart(symbol_ns, period, trigger=None, invalidation=None):
                                  low=df["Low"], close=df["Close"], name="Price"), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=dma20, name="20 DMA", line=dict(width=1)), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=dma50, name="50 DMA", line=dict(width=1)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=dma100, name="100 DMA", line=dict(width=1, dash="dot")), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=dma200, name="200 DMA", line=dict(width=2)), row=1, col=1)
     fig.add_hline(y=high_52w, line_dash="dot", line_color="orange", annotation_text="52W High", row=1, col=1)
     if trigger:
@@ -303,14 +322,19 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         st.warning("Market Regime is WEAK - trade with caution and reduce position size.")
     st.write("")
 
-    tabs = st.tabs(["Market Overview", "Strong Breakout", "Wait for Confirmation",
-                    "Early Watchlist", "Sector Dashboard", "Momentum Map",
-                    "Stock Deep Dive", "Rejected / Failed", "Claude Review", "Export"])
+    allstocks = result.get("all_stocks", pd.DataFrame())     # full universe incl. rejected
+    sector_rot = result.get("sector_rotation", pd.DataFrame())
+
+    # Name-keyed tabs (order can change without breaking the blocks below).
+    tab_names = ["Market Overview", "Sector Rotation", "RS Leaders", "Strong Breakout",
+                 "Wait for Confirmation", "Early Watchlist", "Do Not Chase", "Momentum Map",
+                 "Stock Deep Dive", "Rejected / Failed", "Claude Review", "Export"]
+    T = dict(zip(tab_names, st.tabs(tab_names)))
 
     # =====================================================================
     # 1) MARKET OVERVIEW
     # =====================================================================
-    with tabs[0]:
+    with T["Market Overview"]:
         cc = st.columns(2)
         # A. Classification donut
         donut = pd.DataFrame({
@@ -370,7 +394,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     # =====================================================================
     # 2) STRONG BREAKOUT
     # =====================================================================
-    with tabs[1]:
+    with T["Strong Breakout"]:
         st.subheader("Strong Breakout / Actionable")
         if strong.empty:
             st.info("No strong breakout stocks with current settings.")
@@ -404,7 +428,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     # =====================================================================
     # 3) WAIT FOR CONFIRMATION
     # =====================================================================
-    with tabs[2]:
+    with T["Wait for Confirmation"]:
         st.warning("These stocks are NOT entry candidates yet. Set alerts and wait "
                    "for the trigger condition.")
         if wait.empty:
@@ -446,7 +470,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     # =====================================================================
     # 4) EARLY WATCHLIST
     # =====================================================================
-    with tabs[3]:
+    with T["Early Watchlist"]:
         st.info("Observe only. No trade until confirmation improves.")
         if watch.empty:
             st.info("No early-watchlist stocks with current settings.")
@@ -464,55 +488,100 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                 st.dataframe(watch, use_container_width=True, height=400)
 
     # =====================================================================
-    # 5) SECTOR DASHBOARD
+    # SECTOR ROTATION (percentile-ranked sector strength engine)
     # =====================================================================
-    with tabs[4]:
-        if sector is None or sector.empty:
+    with T["Sector Rotation"]:
+        if sector_rot is None or sector_rot.empty:
             st.info("No sector data available.")
         else:
-            st.plotly_chart(px.bar(sector.sort_values("Avg 20-Day Return %"),
-                                   x="Avg 20-Day Return %", y="Sector", orientation="h",
-                                   title="Sector strength (avg 20-day return)",
-                                   color="Avg 20-Day Return %", color_continuous_scale="RdYlGn"),
-                            use_container_width=True)
-            # Top 3 sector cards
-            st.subheader("Top sectors")
+            # A. Top sector cards
+            st.subheader("Leading sectors")
             tcols = st.columns(3)
-            for i, (_, s) in enumerate(sector.head(3).iterrows()):
-                n_strong = int((strong["Sector"] == s["Sector"]).sum()) if not strong.empty else 0
-                n_wait = int((wait["Sector"] == s["Sector"]).sum()) if not wait.empty else 0
-                metric_card(tcols[i], s["Sector"], f"{s['Avg 20-Day Return %']}%", "#1f4e79",
-                            sub=f"{n_strong} strong / {n_wait} wait")
-            # Sector heatmap-style table (built from classified stocks)
-            if not allc.empty:
-                agg = allc.groupby("Sector").agg(
-                    Avg_Score=("Score", "mean"),
-                    Strong=("Classification", lambda x: (x == "Strong Breakout / Actionable").sum()),
-                    Wait=("Classification", lambda x: (x == "Wait for Confirmation").sum()),
-                    Avg_RelStr=("Relative Strength %", "mean"),
-                    Avg_VolRatio=("Volume Ratio", "mean")).round(2).reset_index()
-                st.subheader("Sector heatmap")
-                # Plotly heatmap (no matplotlib dependency): colour = per-column
-                # normalised value, cell text = the actual number.
-                metrics = ["Avg_Score", "Strong", "Wait", "Avg_RelStr", "Avg_VolRatio"]
-                hm = agg.set_index("Sector")[metrics]
-                znorm = (hm - hm.min()) / (hm.max() - hm.min() + 1e-9)
-                heat = go.Figure(go.Heatmap(
-                    z=znorm.values, x=metrics, y=hm.index.tolist(), text=hm.values,
-                    texttemplate="%{text}", colorscale="RdYlGn", showscale=False))
-                heat.update_layout(height=max(300, 26 * len(hm)), margin=dict(t=20, b=10))
-                st.plotly_chart(heat, use_container_width=True)
-                # Sector drill-down
-                sec_pick = st.selectbox("Show stocks in sector", sorted(allc["Sector"].unique()))
-                st.dataframe(allc[allc["Sector"] == sec_pick][
-                    ["Symbol", "Company", "Classification", "Score", "RSI 14",
-                     "Volume Ratio", "Relative Strength %", "Breakout Status"]],
+            for i, (_, s) in enumerate(sector_rot.head(3).iterrows()):
+                metric_card(tcols[i], f"{s['Sector']} ({s['Sector Status']})",
+                            f"{s['Sector Strength Score']:.0f}/100", "#1f4e79",
+                            sub=f"20D {s['Avg_Return_20D']}% | {int(s['Strong'])} strong / "
+                                f"{int(s['Wait'])} wait / {int(s['RS_Leaders'])} RS")
+            # B. Sector strength bar chart
+            st.plotly_chart(px.bar(sector_rot.sort_values("Sector Strength Score"),
+                                   x="Sector Strength Score", y="Sector", orientation="h",
+                                   title="Sector strength score (0-100)", color="Sector Strength Score",
+                                   color_continuous_scale="RdYlGn"), use_container_width=True)
+            # C. Sector heatmap (no matplotlib dependency)
+            metrics = ["Sector Strength Score", "Avg_Return_20D", "Avg_Return_60D",
+                       "Avg_RS_Score", "Pct_Above_50DMA", "Strong", "Wait"]
+            hm = sector_rot.set_index("Sector")[metrics]
+            znorm = (hm - hm.min()) / (hm.max() - hm.min() + 1e-9)
+            heat = go.Figure(go.Heatmap(z=znorm.values, x=metrics, y=hm.index.tolist(),
+                                        text=hm.values, texttemplate="%{text}",
+                                        colorscale="RdYlGn", showscale=False))
+            heat.update_layout(height=max(320, 26 * len(hm)), margin=dict(t=20, b=10))
+            st.plotly_chart(heat, use_container_width=True)
+            # D. Full sector table
+            with st.expander("Full sector table"):
+                st.dataframe(sector_rot, use_container_width=True, height=360)
+            # E. Sector drill-down
+            if not allstocks.empty:
+                sec_pick = st.selectbox("Show stocks in sector", list(sector_rot["Sector"]))
+                st.dataframe(allstocks[allstocks["Sector"] == sec_pick][
+                    ["Symbol", "Company", "Classification", "Composite Score", "RS Score",
+                     "RSI 14", "Volume Ratio", "Relative Strength %", "Breakout Status"]]
+                    .sort_values("Composite Score", ascending=False),
                     use_container_width=True, height=320)
+
+    # =====================================================================
+    # RS LEADERS (multi-timeframe relative strength)
+    # =====================================================================
+    with T["RS Leaders"]:
+        st.subheader("Relative Strength Leaders")
+        st.caption("RS Score = percentile rank of relative strength vs Nifty across "
+                   "5D/20D/60D/120D/252D. RS Leader = rs_score>=80, RS positive on "
+                   "20D & 60D, and price above 50 & 200 DMA.")
+        if allstocks.empty:
+            st.info("Run a scan to view RS leaders.")
+        else:
+            rs = allstocks.sort_values("RS Score", ascending=False).head(20).copy()
+            st.plotly_chart(px.bar(rs.sort_values("RS Score"), x="RS Score", y="Symbol",
+                                   orientation="h", title="Top 20 by RS Score",
+                                   color="RS Score", color_continuous_scale="Viridis",
+                                   hover_data=["Sector", "RS 20D %", "RS 60D %", "RS 120D %"]),
+                            use_container_width=True)
+            rs_cols = ["Symbol", "Company", "Sector", "Classification", "RS Leader", "RS Score",
+                       "RS 5D %", "RS 20D %", "RS 60D %", "RS 120D %", "RS 252D %", "CMP",
+                       "Distance from 52W High %", "Composite Score"]
+            st.dataframe(rs[[c for c in rs_cols if c in rs.columns]],
+                         use_container_width=True, height=460)
+
+    # =====================================================================
+    # DO NOT CHASE (strong but overextended - bad fresh entry)
+    # =====================================================================
+    with T["Do Not Chase"]:
+        st.warning("These can be good stocks, but they are OVEREXTENDED right now - "
+                   "a fresh entry has poor risk-reward. Wait for the suggested condition.")
+        if allstocks.empty or "Overextended" not in allstocks:
+            st.info("Run a scan to view this list.")
+        else:
+            nc = allstocks[allstocks["Overextended"] == "Yes"].copy()
+            if nc.empty:
+                st.success("No overextended stocks right now.")
+            else:
+                nc = nc.sort_values("Composite Score", ascending=False)
+                st.plotly_chart(px.scatter(
+                    nc, x="Distance from 20 DMA %", y="Distance from 200 DMA %",
+                    size="Composite Score", color="Classification", color_discrete_map=CLASS_COLORS,
+                    hover_name="Symbol", title="How extended? (further right/up = more stretched)",
+                    size_max=26), use_container_width=True)
+                nc_cols = ["Symbol", "Company", "Sector", "Classification", "CMP",
+                           "Distance from 20 DMA %", "Distance from 50 DMA %",
+                           "Distance from 200 DMA %", "RSI 14", "Gap Up %", "Risk Reward",
+                           "No Chase Reason", "Wait Condition", "Composite Score"]
+                st.dataframe(nc[[c for c in nc_cols if c in nc.columns]],
+                             use_container_width=True, height=440)
 
     # =====================================================================
     # 6) MOMENTUM MAP
     # =====================================================================
-    with tabs[5]:
+    with T["Momentum Map"]:
         if allc.empty:
             st.info("Run a scan that produces classified stocks to view maps.")
         else:
@@ -543,31 +612,57 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     # =====================================================================
     # 7) STOCK DEEP DIVE
     # =====================================================================
-    with tabs[6]:
-        if allc.empty:
-            st.info("Run a scan that produces classified stocks to deep-dive.")
+    with T["Stock Deep Dive"]:
+        dd_src = allstocks if not allstocks.empty else allc
+        if dd_src.empty:
+            st.info("Run a scan to deep-dive a stock.")
         else:
-            pick = st.selectbox("Select a stock", allc["Symbol"].tolist())
-            r = allc[allc["Symbol"] == pick].iloc[0]
+            pick = st.selectbox("Select a stock", dd_src["Symbol"].tolist())
+            r = dd_src[dd_src["Symbol"] == pick].iloc[0]
             cls = r["Classification"]
             left, right = st.columns([1.2, 1])
             with left:
+                mclass = r.get("Momentum Class", cls)
                 st.markdown(
                     f"### {r['Symbol']} — {r['Company']}\n"
-                    f"{badge(cls, CLASS_COLORS.get(cls, '#555'))} &nbsp; "
+                    f"{badge(mclass, CLASS_COLORS.get(cls, '#1f4e79'))} &nbsp; "
                     f"{badge(r['Risk Level'], RISK_COLORS.get(r['Risk Level'], '#555'))}",
                     unsafe_allow_html=True)
-                st.write(f"**Sector:** {r['Sector']}  |  **Score:** {r['Score']}  |  "
-                         f"**Remark:** {r['Final Remark']}")
-                # Decision box
-                msg = {"Strong Breakout / Actionable":
-                       ("success", "Actionable only after manual chart/news confirmation."),
-                       "Wait for Confirmation":
-                       ("warning", "Do not enter yet. Wait for the trigger condition."),
-                       "Early Watchlist": ("info", "Observe only.")}.get(cls, ("error", "Avoid for now."))
-                getattr(st, msg[0])(msg[1])
+                st.write(
+                    f"**Sector:** {r['Sector']} (rank {r.get('Sector Rank', '-')}, "
+                    f"{r.get('Sector Status', '-')})  |  **Composite:** {r.get('Composite Score', '-')}  "
+                    f"|  **Old Score:** {r['Score']}  |  **RS Score:** {r.get('RS Score', '-')}  "
+                    f"|  **Breakout Quality:** {r.get('Breakout Quality', '-')} "
+                    f"({r.get('Breakout Quality Status', '-')})")
+                # Decision box (overextension takes priority, else momentum class)
+                if r.get("Overextended") == "Yes":
+                    st.error(f"Do Not Chase: good stock but overextended now. "
+                             f"{r.get('Wait Condition', '')}")
+                else:
+                    msg = {"Elite Momentum":
+                           ("success", "Best quality momentum candidate. Still confirm chart/news."),
+                           "Actionable Breakout":
+                           ("success", "Can be considered after manual confirmation."),
+                           "Wait for Confirmation":
+                           ("warning", "Set alert. Do not enter yet."),
+                           "Early Watchlist": ("info", "Observe only.")}.get(
+                               mclass, ("error", "Avoid for now."))
+                    getattr(st, msg[0])(msg[1])
             with right:
-                st.plotly_chart(score_gauge(r["Score"]), use_container_width=True)
+                # Main gauge = Composite Momentum Score
+                st.plotly_chart(score_gauge(r.get("Composite Score", r["Score"])),
+                                use_container_width=True)
+            # Score breakdown bar (each sub-score normalised to 0-100)
+            breakdown = pd.DataFrame({
+                "Component": ["Trend", "RS", "Sector", "Breakout Quality", "Pullback", "Risk"],
+                "Score": [safe_num(r.get("Trend Score")) * 4, safe_num(r.get("RS Score")),
+                          safe_num(r.get("Sector Strength Score")), safe_num(r.get("Breakout Quality")),
+                          safe_num(r.get("Pullback Score")) * 5,
+                          safe_num(r.get("Risk Score")) * 100 / 15]})
+            st.plotly_chart(px.bar(breakdown, x="Score", y="Component", orientation="h",
+                                   range_x=[0, 100], title="Score breakdown (0-100 each)",
+                                   color="Score", color_continuous_scale="RdYlGn"),
+                            use_container_width=True)
             # Indicator cards
             ic = st.columns(7)
             for col, lbl, key in zip(ic,
@@ -583,7 +678,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     # =====================================================================
     # 8) REJECTED / FAILED
     # =====================================================================
-    with tabs[7]:
+    with T["Rejected / Failed"]:
         if rejected is not None and not rejected.empty and "Reason" in rejected:
             rc = rejected["Reason"].value_counts().reset_index()
             rc.columns = ["Reason", "Count"]
@@ -603,7 +698,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     # =====================================================================
     # 9) CLAUDE REVIEW
     # =====================================================================
-    with tabs[8]:
+    with T["Claude Review"]:
         st.subheader("A. Strong Breakout review prompt")
         st.caption("Click the copy icon at the top-right of the box.")
         st.code(scanner.build_strong_prompt(strong), language="text")
@@ -613,7 +708,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     # =====================================================================
     # 10) EXPORT
     # =====================================================================
-    with tabs[9]:
+    with T["Export"]:
         st.subheader("Export results")
         overext = allc[(allc["Distance from 20 DMA %"] > 10) |
                        (allc["Distance from 200 DMA %"] > 40)].copy() if not allc.empty else pd.DataFrame()

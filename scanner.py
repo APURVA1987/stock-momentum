@@ -91,10 +91,13 @@ def get_nifty_context(period: str = "5y") -> dict:
     """
     nifty = download_history(NIFTY_SYMBOL, period=period)
     if nifty.empty or len(nifty) < 200:
-        return {"nifty_20d_return": np.nan, "regime": "Unknown"}
+        return {"nifty_20d_return": np.nan, "regime": "Unknown",
+                "nifty_returns": {h: np.nan for h in (5, 20, 60, 120, 252)}}
 
     close = nifty["Close"]
-    n_ret20 = ind.pct_change_over(close, 20)
+    # Multi-timeframe Nifty returns (used for relative strength on each horizon).
+    nifty_returns = {h: ind.pct_change_over(close, h) for h in (5, 20, 60, 120, 252)}
+    n_ret20 = nifty_returns[20]
     n_50 = float(ind.sma(close, 50).iloc[-1])
     n_200 = float(ind.sma(close, 200).iloc[-1])
     n_close = float(close.iloc[-1])
@@ -110,6 +113,7 @@ def get_nifty_context(period: str = "5y") -> dict:
 
     return {
         "nifty_20d_return": n_ret20,
+        "nifty_returns": nifty_returns,
         "regime": regime,
         "nifty_close": round(n_close, 2),
         "nifty_50dma": round(n_50, 2),
@@ -120,19 +124,26 @@ def get_nifty_context(period: str = "5y") -> dict:
 # -----------------------------------------------------------------------------
 # 2. INDICATOR PACK (everything we need for ONE stock)
 # -----------------------------------------------------------------------------
-def compute_metrics(df: pd.DataFrame, nifty_20d_return: float,
+def compute_metrics(df: pd.DataFrame, nifty_returns: dict,
                     retest_window: int = 60, retest_tol: float = 7.0) -> dict:
     """Calculate every indicator for a single stock. Returns a dict, or None if
-    there is not enough history (need ~200 days for the 200 DMA)."""
+    there is not enough history (need ~200 days for the 200 DMA).
+
+    `nifty_returns` is a dict {5,20,60,120,252: return%} from get_nifty_context,
+    used to compute multi-timeframe relative strength.
+    """
     if df.empty or len(df) < 220:
         return None
 
     close, high, low, volume = df["Close"], df["High"], df["Low"], df["Volume"]
+    open_ = df["Open"]
 
-    # --- Moving averages ---
+    # --- Moving averages (100 DMA added for deep-dive chart) ---
     dma20, dma50, dma200 = ind.sma(close, 20), ind.sma(close, 50), ind.sma(close, 200)
+    dma100 = ind.sma(close, 100)
     cmp = float(close.iloc[-1])
     ma20, ma50, ma200 = float(dma20.iloc[-1]), float(dma50.iloc[-1]), float(dma200.iloc[-1])
+    ma100 = float(dma100.iloc[-1]) if not pd.isna(dma100.iloc[-1]) else np.nan
     slope200 = ind.slope_pct(dma200, 30)
 
     # --- 52-week high / previous high ---
@@ -143,6 +154,11 @@ def compute_metrics(df: pd.DataFrame, nifty_20d_return: float,
     dist_from_52w = (cmp / high_52w - 1.0) * 100.0
     dist_from_200 = (cmp / ma200 - 1.0) * 100.0
     dist_from_20 = (cmp / ma20 - 1.0) * 100.0
+    dist_from_50 = (cmp / ma50 - 1.0) * 100.0
+
+    # --- Gap up % (latest open vs previous close) ---
+    gap_up = ((float(open_.iloc[-1]) / float(close.iloc[-2]) - 1.0) * 100.0
+              if len(close) > 1 and float(close.iloc[-2]) > 0 else 0.0)
 
     # --- RSI / ADX / ATR / candle strength ---
     rsi14 = float(ind.rsi(close, 14).iloc[-1])
@@ -155,10 +171,19 @@ def compute_metrics(df: pd.DataFrame, nifty_20d_return: float,
     latest_vol = float(volume.iloc[-1])
     vol_ratio = (latest_vol / avg_vol_20) if avg_vol_20 > 0 else np.nan
 
-    # --- Returns / relative strength ---
-    ret_20d = ind.pct_change_over(close, 20)
-    rel_strength = (ret_20d - nifty_20d_return) if (not np.isnan(nifty_20d_return)
-                                                    and not np.isnan(ret_20d)) else np.nan
+    # --- Multi-timeframe returns & relative strength (vs Nifty) ---
+    rets = {h: ind.pct_change_over(close, h) for h in (5, 20, 60, 120, 252)}
+
+    def rel(h):
+        nr = nifty_returns.get(h, np.nan)
+        if np.isnan(nr) or np.isnan(rets[h]):
+            return np.nan
+        return rets[h] - nr
+
+    rs_tf = {h: rel(h) for h in (5, 20, 60, 120, 252)}
+    ret_20d = rets[20]
+    nifty_20d_return = nifty_returns.get(20, np.nan)
+    rel_strength = rs_tf[20]   # keep the existing 20-day relative strength field
 
     # --- 200 DMA retest analysis ---
     win = min(retest_window, len(df) - 1)
@@ -210,6 +235,8 @@ def compute_metrics(df: pd.DataFrame, nifty_20d_return: float,
         "Distance from 52W High %": round(dist_from_52w, 2),
         "Distance from 200 DMA %": round(dist_from_200, 2),
         "Distance from 20 DMA %": round(dist_from_20, 2),
+        "Distance from 50 DMA %": round(dist_from_50, 2),
+        "Gap Up %": round(gap_up, 2),
         "RSI 14": round(rsi14, 2),
         "ADX 14": round(adx14, 2) if not np.isnan(adx14) else np.nan,
         "ATR 14": round(atr14, 2) if not np.isnan(atr14) else np.nan,
@@ -218,6 +245,17 @@ def compute_metrics(df: pd.DataFrame, nifty_20d_return: float,
         "20-Day Return %": round(ret_20d, 2) if not np.isnan(ret_20d) else np.nan,
         "Nifty 20-Day Return %": round(nifty_20d_return, 2) if not np.isnan(nifty_20d_return) else np.nan,
         "Relative Strength %": round(rel_strength, 2) if not np.isnan(rel_strength) else np.nan,
+        # Multi-timeframe returns & relative strength
+        "Return 5D %": round(rets[5], 2) if not np.isnan(rets[5]) else np.nan,
+        "Return 20D %": round(rets[20], 2) if not np.isnan(rets[20]) else np.nan,
+        "Return 60D %": round(rets[60], 2) if not np.isnan(rets[60]) else np.nan,
+        "Return 120D %": round(rets[120], 2) if not np.isnan(rets[120]) else np.nan,
+        "Return 252D %": round(rets[252], 2) if not np.isnan(rets[252]) else np.nan,
+        "RS 5D %": round(rs_tf[5], 2) if not np.isnan(rs_tf[5]) else np.nan,
+        "RS 20D %": round(rs_tf[20], 2) if not np.isnan(rs_tf[20]) else np.nan,
+        "RS 60D %": round(rs_tf[60], 2) if not np.isnan(rs_tf[60]) else np.nan,
+        "RS 120D %": round(rs_tf[120], 2) if not np.isnan(rs_tf[120]) else np.nan,
+        "RS 252D %": round(rs_tf[252], 2) if not np.isnan(rs_tf[252]) else np.nan,
         "Retest Date": retest_date,
         "Days Below 200 DMA": days_below_200,
         "Breakout Status": breakout_status,
@@ -227,7 +265,10 @@ def compute_metrics(df: pd.DataFrame, nifty_20d_return: float,
         "_breakout_sustain": breakout_sustain,
         "_high_52w": high_52w, "_prev_52w_high": prev_52w_high,
         "_latest_high": latest_high, "_ma20": ma20, "_ma50": ma50, "_ma200": ma200,
-        "_atr": atr14, "_swing_low": low_60, "_ret20_raw": ret_20d,
+        "_ma100": ma100, "_atr": atr14, "_swing_low": low_60, "_ret20_raw": ret_20d,
+        "_ret60_raw": rets[60], "_gap_up": gap_up,
+        "_above_50": cmp > ma50, "_above_200": cmp > ma200,
+        "_rs20": rs_tf[20], "_rs60": rs_tf[60], "_rs120": rs_tf[120], "_rs252": rs_tf[252],
     }
 
 
@@ -305,6 +346,70 @@ def risk_level(score: int, days_below_200: int) -> str:
     if score < SCORE_WAIT or days_below_200 > 10:
         return "High Risk"
     return "Medium Risk"
+
+
+def _f(v, default=0.0):
+    """Treat None/NaN as a default so comparisons never crash."""
+    try:
+        return default if (v is None or (isinstance(v, float) and np.isnan(v))) else float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+# --- Breakout Quality (0-100): how clean/healthy is the breakout? ---
+def breakout_quality(m: dict) -> tuple:
+    bq = 0
+    if m["CMP"] > m["_prev_52w_high"]: bq += 25      # above previous 52W high
+    if _f(m["Volume Ratio"]) >= 1.5: bq += 20        # volume confirmation
+    if _f(m["Close Position"]) >= 0.75: bq += 20     # strong candle close
+    if m["_breakout_sustain"]: bq += 20              # 2/3 day sustain
+    if _f(m["Distance from 20 DMA %"]) <= 10: bq += 15   # not overextended
+    if bq >= 80: status = "Excellent"
+    elif bq >= 60: status = "Good"
+    elif bq >= 40: status = "Weak"
+    else: status = "Failed"
+    return bq, status
+
+
+# --- Overextension / Do-Not-Chase: strong but too far for a fresh entry ---
+def overextension(m: dict) -> tuple:
+    reasons = []
+    if _f(m["Distance from 20 DMA %"]) > 10: reasons.append("More than 10% above 20 DMA")
+    if _f(m["Distance from 50 DMA %"]) > 20: reasons.append("More than 20% above 50 DMA")
+    if _f(m["Distance from 200 DMA %"]) > 40: reasons.append("More than 40% above 200 DMA")
+    if _f(m["RSI 14"]) > 75: reasons.append("RSI overheated (>75)")
+    if _f(m["Gap Up %"]) > 5: reasons.append("Large gap up (>5%)")
+    if _f(m["Risk Reward"], 99) < 1.2: reasons.append("Poor risk-reward (<1.2)")
+    over = len(reasons) > 0
+    # Suggested wait condition (first applicable).
+    if _f(m["Distance from 20 DMA %"]) > 10:
+        wait = "Wait for pullback to 20 DMA"
+    elif _f(m["Distance from 50 DMA %"]) > 20 or _f(m["Distance from 200 DMA %"]) > 40:
+        wait = "Wait for consolidation / breakout retest"
+    elif _f(m["RSI 14"]) > 75:
+        wait = "Wait for RSI to cool down"
+    elif _f(m["Gap Up %"]) > 5:
+        wait = "Wait for gap fill / consolidation"
+    elif _f(m["Risk Reward"], 99) < 1.2:
+        wait = "Avoid until risk-reward improves"
+    else:
+        wait = "-"
+    return over, reasons, wait
+
+
+def composite_class(score: int) -> str:
+    if score >= 85: return "Elite Momentum"
+    if score >= 75: return "Actionable Breakout"
+    if score >= 65: return "Wait for Confirmation"
+    if score >= 55: return "Early Watchlist"
+    return "Ignore"
+
+
+def sector_status_from_score(v: float) -> str:
+    if v >= 75: return "Leading"
+    if v >= 60: return "Improving"
+    if v >= 40: return "Neutral"
+    return "Weak"
 
 
 # -----------------------------------------------------------------------------
@@ -527,7 +632,7 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
             if df.empty:
                 failed.append(symbol)
             else:
-                m = compute_metrics(df, nifty_20d, retest_window, retest_tol)
+                m = compute_metrics(df, ctx["nifty_returns"], retest_window, retest_tol)
                 if m is None:
                     rejected_rows.append({
                         "Symbol": symbol, "Company": company, "Sector": sector,
@@ -546,31 +651,133 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
         if progress_callback:
             progress_callback(i, total, symbol)
 
-    # --- Sector strength (needs all stocks first) ---
+    # --- Simple sector strength (kept for backward-compatible export) ---
     sector_df = build_sector_strength(stocks)
     top_sectors = list(sector_df.head(3)["Sector"]) if not sector_df.empty else []
     sector_rank_map = dict(zip(sector_df["Sector"], sector_df["Rank"])) if not sector_df.empty else {}
 
-    # --- Phase 2: score + classify ---
-    strong_rows, wait_rows, watch_rows = [], [], []
+    # =========================================================================
+    # PHASE A: per-stock score, classification and breakout quality
+    # =========================================================================
     for s in stocks:
         m = s["m"]
         score, comps = score_components(m, s["sector"] in top_sectors, regime_supportive)
+        bq, bq_status = breakout_quality(m)
         classification, reason = classify(m, score, min_rsi, min_vol_ratio, regime, min_score)
-        if classification == "Rejected":
-            rejected_rows.append({
-                "Symbol": s["symbol"], "Company": s["company"], "Sector": s["sector"],
-                "Market Cap Category": s["cap"], "Score": score,
-                "Classification": "Rejected", "Reason": reason})
-            continue
+        s.update(score=score, comps=comps, bq=bq, bq_status=bq_status,
+                 classification=classification, reason=reason)
+
+    # =========================================================================
+    # PHASE B: RS Score = percentile rank of relative strength across universe
+    # =========================================================================
+    if stocks:
+        rsdf = pd.DataFrame({
+            "rs20": [_f(s["m"]["_rs20"], np.nan) for s in stocks],
+            "rs60": [_f(s["m"]["_rs60"], np.nan) for s in stocks],
+            "rs120": [_f(s["m"]["_rs120"], np.nan) for s in stocks],
+            "rs252": [_f(s["m"]["_rs252"], np.nan) for s in stocks]})
+
+        def prank(col):
+            x = rsdf[col]
+            x = x.fillna(x.min() if x.notna().any() else 0)   # missing horizon ranks low
+            return x.rank(pct=True) * 100
+
+        rs_score = (0.30 * prank("rs20") + 0.30 * prank("rs60")
+                    + 0.25 * prank("rs120") + 0.15 * prank("rs252")).round(0)
+        rs_rank = rs_score.rank(ascending=False, method="min")
+        for i, s in enumerate(stocks):
+            m = s["m"]
+            s["rs_score"] = int(rs_score.iloc[i])
+            s["rs_rank"] = int(rs_rank.iloc[i])
+            s["rs_leader"] = bool(
+                s["rs_score"] >= 80 and _f(m["_rs20"]) > 0 and _f(m["_rs60"]) > 0
+                and m["_above_50"] and m["_above_200"])
+
+    # =========================================================================
+    # PHASE C: Sector Rotation (aggregate per sector, percentile-ranked score)
+    # =========================================================================
+    sector_rotation = pd.DataFrame()
+    sector_score_map, sector_rank2_map, sector_status_map = {}, {}, {}
+    if stocks:
+        sdata = pd.DataFrame([{
+            "Sector": s["sector"], "ret20": _f(s["m"]["_ret20_raw"], np.nan),
+            "ret60": _f(s["m"]["_ret60_raw"], np.nan), "rs_score": s["rs_score"],
+            "above50": s["m"]["_above_50"], "above200": s["m"]["_above_200"],
+            "vol": _f(s["m"]["Volume Ratio"], np.nan), "cls": s["classification"],
+            "rsl": s["rs_leader"]} for s in stocks])
+        g = sdata.groupby("Sector").agg(
+            Avg_Return_20D=("ret20", "mean"), Avg_Return_60D=("ret60", "mean"),
+            Avg_RS_Score=("rs_score", "mean"),
+            Pct_Above_50DMA=("above50", lambda x: 100 * x.mean()),
+            Pct_Above_200DMA=("above200", lambda x: 100 * x.mean()),
+            Strong=("cls", lambda x: (x == "Strong Breakout / Actionable").sum()),
+            Wait=("cls", lambda x: (x == "Wait for Confirmation").sum()),
+            RS_Leaders=("rsl", "sum"), Avg_Volume_Ratio=("vol", "mean")).reset_index()
+        g["Strong_Wait"] = g["Strong"] + g["Wait"]
+        rk = lambda c: g[c].rank(pct=True)
+        sss = (25 * rk("Avg_Return_20D") + 25 * rk("Avg_Return_60D")
+               + 25 * rk("Avg_RS_Score") + 15 * rk("Pct_Above_50DMA")
+               + 10 * rk("Strong_Wait")).round(0)
+        g["Sector Strength Score"] = sss
+        g = g.sort_values("Sector Strength Score", ascending=False).reset_index(drop=True)
+        g["Sector Rank"] = range(1, len(g) + 1)
+        g["Sector Status"] = g["Sector Strength Score"].apply(sector_status_from_score)
+        for c in ["Avg_Return_20D", "Avg_Return_60D", "Avg_RS_Score", "Pct_Above_50DMA",
+                  "Pct_Above_200DMA", "Avg_Volume_Ratio"]:
+            g[c] = g[c].round(2)
+        sector_rotation = g
+        sector_score_map = dict(zip(g["Sector"], g["Sector Strength Score"]))
+        sector_rank2_map = dict(zip(g["Sector"], g["Sector Rank"]))
+        sector_status_map = dict(zip(g["Sector"], g["Sector Status"]))
+
+    # =========================================================================
+    # PHASE D: composite momentum score + build rows + route
+    # =========================================================================
+    strong_rows, wait_rows, watch_rows, all_rows = [], [], [], []
+    for s in stocks:
+        m, comps, score = s["m"], s["comps"], s["score"]
+        classification = s["classification"]
+        sec_sss = _f(sector_score_map.get(s["sector"]), 0)
+        trend100 = comps["Trend Score"] * 4.0          # 25 -> 100
+        risk100 = comps["Risk Score"] * (100.0 / 15)   # 15 -> 100
+        composite = int(round(0.25 * trend100 + 0.25 * s["rs_score"] + 0.20 * s["bq"]
+                              + 0.15 * sec_sss + 0.15 * risk100))
+        over, reasons, wait_cond = overextension(m)
+        extra = {
+            "RS Score": s["rs_score"], "RS Rank": s["rs_rank"],
+            "RS Leader": "Yes" if s["rs_leader"] else "No",
+            "Return 5D %": m["Return 5D %"], "Return 20D %": m["Return 20D %"],
+            "Return 60D %": m["Return 60D %"], "Return 120D %": m["Return 120D %"],
+            "Return 252D %": m["Return 252D %"],
+            "RS 5D %": m["RS 5D %"], "RS 20D %": m["RS 20D %"], "RS 60D %": m["RS 60D %"],
+            "RS 120D %": m["RS 120D %"], "RS 252D %": m["RS 252D %"],
+            "Sector Strength Score": sec_sss,
+            "Sector Rank": sector_rank2_map.get(s["sector"], "-"),
+            "Sector Status": sector_status_map.get(s["sector"], "-"),
+            "Breakout Quality": s["bq"], "Breakout Quality Status": s["bq_status"],
+            "Composite Score": composite, "Momentum Class": composite_class(composite),
+            "Distance from 50 DMA %": m["Distance from 50 DMA %"], "Gap Up %": m["Gap Up %"],
+            "Overextended": "Yes" if over else "No",
+            "No Chase Reason": "; ".join(reasons) if reasons else "-",
+            "Wait Condition": wait_cond if over else "-",
+        }
         rowd = _build_row(s, m, score, comps, classification, sector_rank_map,
                           min_vol_ratio, regime)
+        rowd.update(extra)
+        all_rows.append(rowd)
+
         if classification == "Strong Breakout / Actionable":
             strong_rows.append(rowd)
         elif classification == "Wait for Confirmation":
             wait_rows.append(rowd)
-        else:
+        elif classification == "Early Watchlist":
             watch_rows.append(rowd)
+        else:  # Rejected by rule
+            rejected_rows.append({
+                "Symbol": s["symbol"], "Company": s["company"], "Sector": s["sector"],
+                "Market Cap Category": s["cap"], "Score": score,
+                "Composite Score": composite, "RS Score": s["rs_score"],
+                "Classification": "Rejected", "Reason": s["reason"]})
 
     # --- Build & sort each table ---
     def finalise(rows, sort_cols, ascending):
@@ -580,17 +787,18 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
             df.insert(0, "Rank", range(1, len(df) + 1))
         return df
 
-    strong_df = finalise(strong_rows, ["Score", "Relative Strength %"], [False, False])
-    # Wait: score desc, distance-from-52W-high ascending (closer first), rel-str desc
+    strong_df = finalise(strong_rows, ["Composite Score", "Relative Strength %"], [False, False])
     wait_df = finalise(wait_rows,
-                       ["Score", "Distance from 52W High %", "Relative Strength %"],
+                       ["Composite Score", "Distance from 52W High %", "Relative Strength %"],
                        [False, True, False])
-    watch_df = finalise(watch_rows, ["Score"], [False])
+    watch_df = finalise(watch_rows, ["Composite Score"], [False])
+    all_df = finalise(all_rows, ["Composite Score"], [False])
     rejected_df = pd.DataFrame(rejected_rows)
 
     return {
         "strong": strong_df, "wait": wait_df, "watchlist": watch_df,
         "rejected": rejected_df, "failed": failed,
+        "all_stocks": all_df, "sector_rotation": sector_rotation,
         "sector_strength": sector_df, "top_sectors": top_sectors,
         "regime": regime, "nifty_context": ctx,
         "universe_count": total,
