@@ -81,6 +81,64 @@ def download_history(symbol_ns: str, period: str = "5y", retries: int = 2) -> pd
     return df
 
 
+def _extract_one(df, sym_ns):
+    """Pull a single ticker's OHLCV out of a multi-ticker yf.download frame."""
+    if df is None or df.empty:
+        return None
+    try:
+        if isinstance(df.columns, pd.MultiIndex):
+            if sym_ns not in df.columns.get_level_values(0):
+                return None
+            sub = df[sym_ns].copy()
+        else:
+            sub = df.copy()
+        keep = ["Open", "High", "Low", "Close", "Volume"]
+        sub = sub[[c for c in keep if c in sub.columns]].dropna(subset=["Close"])
+        return sub if not sub.empty else None
+    except Exception:
+        return None
+
+
+def download_batch(symbols, period: str = "5y", chunk: int = 50, retries: int = 2,
+                   progress=None) -> dict:
+    """Download MANY NSE symbols in a few BATCHED, threaded requests instead of
+    one request per symbol.
+
+    WHY: Yahoo rate-limits per request. For a 600+ stock universe, one-per-symbol
+    means 600+ requests (rate-limited + slow). Batching ~50 tickers per call turns
+    that into ~13 requests, which is far friendlier and much faster.
+
+    Returns a dict {SYMBOL (no .NS): cleaned OHLCV DataFrame}. Missing/failed
+    symbols are simply absent from the dict (the caller treats them as failed).
+    `progress(done, total)` is called after each batch so the UI can show a bar.
+    """
+    out = {}
+    syms_ns = [f"{str(s).strip().upper()}.NS" for s in symbols]
+    total = len(syms_ns)
+    done = 0
+    for i in range(0, total, chunk):
+        part = syms_ns[i:i + chunk]
+        df = None
+        for attempt in range(retries + 1):
+            try:
+                df = yf.download(part, period=period, interval="1d", auto_adjust=True,
+                                 progress=False, threads=True, group_by="ticker")
+            except Exception:
+                df = None
+            if df is not None and not df.empty:
+                break
+            if attempt < retries:
+                time.sleep(2.0)   # brief pause before retrying a failed batch
+        for sym_ns in part:
+            sub = _extract_one(df, sym_ns)
+            if sub is not None:
+                out[sym_ns[:-3]] = sub      # strip ".NS"
+        done += len(part)
+        if progress:
+            progress(done, total)
+    return out
+
+
 def get_nifty_context(period: str = "5y") -> dict:
     """Download Nifty 50 ONCE and work out the overall MARKET REGIME.
 
@@ -793,14 +851,25 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
     failed = []
 
     total = len(universe_df)
+
+    # --- BATCHED DOWNLOAD: fetch the whole universe in a few threaded requests
+    #     (instead of one request per symbol) to avoid Yahoo rate-limits. ---
+    all_symbols = [str(r.symbol).strip().upper() for r in universe_df.itertuples(index=False)]
+
+    def _dl_progress(done, tot):
+        if progress_callback:
+            progress_callback(done, tot, "downloading market data (batched)")
+
+    data = download_batch(all_symbols, period=period, progress=_dl_progress)
+
     for i, row in enumerate(universe_df.itertuples(index=False), start=1):
         symbol = str(row.symbol).strip().upper()
         company = getattr(row, "company", symbol)
         sector = getattr(row, "sector", "-")
         cap = getattr(row, "market_cap_category", "-")
         try:
-            df = download_history(f"{symbol}.NS", period=period)
-            if df.empty:
+            df = data.get(symbol)              # from the batched download above
+            if df is None or df.empty:
                 failed.append(symbol)
             else:
                 m = compute_metrics(df, ctx["nifty_returns"], retest_window, retest_tol)

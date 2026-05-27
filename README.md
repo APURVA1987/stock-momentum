@@ -6,7 +6,10 @@ pulled back toward the **200-day moving average (200 DMA)**, respected it,
 recovered, and are now approaching or crossing their previous high again.
 
 Trading horizon: **15 to 30 days** (swing trading).
-Data source: **Yahoo Finance** via the `yfinance` library.
+Data source: **Yahoo Finance** via the `yfinance` library. Prices are downloaded in
+**batches** (~50 tickers per request, threaded), so even a 600+ stock universe makes
+only ~13 requests instead of one-per-stock - this avoids Yahoo rate-limits and keeps
+the scan fast.
 
 ---
 
