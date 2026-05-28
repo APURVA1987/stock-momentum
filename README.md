@@ -71,6 +71,12 @@ To stop it, go back to the terminal and press **Ctrl + C**.
    - Filter settings (retest window, RSI, volume ratio, minimum score)
 2. (Optional) Upload your own `universe.csv` from the sidebar.
    If you don't upload one, the default `universe.csv` in this folder is used.
+   - **Easier alternative:** open the **"Or: upload NSE index CSVs (one per cap tier)"**
+     expander and drop in the official niftyindices.com constituent files
+     (`ind_nifty100list.csv` → Large Cap, `ind_niftymidcap150list.csv` → Mid Cap,
+     `ind_niftysmallcap250list.csv` → Small Cap). The app auto-maps `Symbol`,
+     `Company Name`, `Industry`, filters `Series == EQ`, dedups by symbol, and
+     uses the slot label as the cap tier — no editing required.
 3. Click **Run Scan**. A progress bar shows scanning status.
 4. Read the **summary cards** at the top: Total Scanned, Strong Breakout,
    Wait for Confirmation, Early Watchlist, Rejected, Market Regime,

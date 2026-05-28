@@ -94,8 +94,51 @@ def df_with_links(df: pd.DataFrame, cols, height=420):
     st.dataframe(d[show], use_container_width=True, height=height, column_config=SCREENER_COLCFG)
 
 
-def load_universe(uploaded_file) -> pd.DataFrame:
+def parse_nse_constituent(file, cap_label: str) -> pd.DataFrame:
+    """Parse an NSE / niftyindices.com constituent CSV (e.g. ind_nifty100list.csv)
+    into our 4-column universe schema. The file's typical columns are:
+        Company Name, Industry, Symbol, Series, ISIN Code
+    We keep only Series == 'EQ' rows. `cap_label` becomes market_cap_category."""
+    try:
+        df = pd.read_csv(file)
+    except Exception:
+        return pd.DataFrame()
+    df.columns = [c.strip() for c in df.columns]
+    cmap = {c.lower(): c for c in df.columns}
+    sym = cmap.get("symbol")
+    if not sym:
+        return pd.DataFrame()
+    name = cmap.get("company name") or cmap.get("companyname") or sym
+    ind = cmap.get("industry") or cmap.get("sector")
+    series = cmap.get("series")
+    if series:
+        df = df[df[series].astype(str).str.strip().str.upper() == "EQ"]
+    out = pd.DataFrame({
+        "symbol": df[sym].astype(str).str.strip().str.upper(),
+        "company": (df[name].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
+                    .str.rstrip(".") if name in df.columns else df[sym]),
+        "sector": df[ind].astype(str).str.strip() if (ind and ind in df.columns) else "-",
+        "market_cap_category": cap_label,
+    })
+    return out[out["symbol"].astype(str).str.len() > 0].reset_index(drop=True)
+
+
+def load_universe(uploaded_file, nse_files=None) -> pd.DataFrame:
+    """Load the universe. Priority:
+       1. NSE constituent CSVs (one per cap tier) if any were uploaded.
+       2. Legacy single 4-column CSV upload.
+       3. Default universe.csv in this folder.
+    """
     required = {"symbol", "company", "sector", "market_cap_category"}
+    # 1. NSE constituent files (one per cap tier).
+    if nse_files:
+        parts = [parse_nse_constituent(f, cap) for f, cap in nse_files if f is not None]
+        parts = [p for p in parts if not p.empty]
+        if parts:
+            df = pd.concat(parts, ignore_index=True)
+            df = df.drop_duplicates(subset="symbol", keep="first").reset_index(drop=True)
+            return df
+    # 2. Legacy single-file upload or 3. default.
     if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
     elif os.path.exists(DEFAULT_UNIVERSE):
@@ -121,6 +164,17 @@ def classified_all(result) -> pd.DataFrame:
 # -----------------------------------------------------------------------------
 st.sidebar.header("Scan Settings")
 uploaded = st.sidebar.file_uploader("Upload universe.csv (optional)", type=["csv"])
+
+# Drop in NSE / niftyindices.com constituent files (one per cap tier). The app
+# auto-maps Symbol / Company Name / Industry and filters Series == EQ. If any
+# of these slots is filled, it OVERRIDES the universe.csv / single-file upload.
+with st.sidebar.expander("Or: upload NSE index CSVs (one per cap tier)"):
+    st.caption("Drop the ind_nifty100list / ind_niftymidcap150list / "
+               "ind_niftysmallcap250list CSVs from niftyindices.com here.")
+    nse_large = st.file_uploader("Large Cap file", type="csv", key="nse_large")
+    nse_mid = st.file_uploader("Mid Cap file", type="csv", key="nse_mid")
+    nse_small = st.file_uploader("Small Cap file", type="csv", key="nse_small")
+NSE_FILES = [(nse_large, "Large Cap"), (nse_mid, "Mid Cap"), (nse_small, "Small Cap")]
 cap_choice = st.sidebar.selectbox(
     "Market cap category",
     ["All", "Large Cap only", "Mid Cap only", "Small Cap only",
@@ -156,7 +210,7 @@ def filter_by_cap(df, choice):
 
 
 if run_clicked:
-    universe = load_universe(uploaded)
+    universe = load_universe(uploaded, NSE_FILES)
     if universe.empty:
         st.stop()
     universe = filter_by_cap(universe, cap_choice)
