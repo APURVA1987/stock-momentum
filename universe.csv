@@ -645,3 +645,108 @@ SHOPERSTOP,Shoppers Stop,Retail,Small Cap
 ARVINDFASN,Arvind Fashions,Retail,Small Cap
 SENCO,Senco Gold,Retail,Small Cap
 THANGAMAYL,Thangamayil Jewellery,Retail,Small Cap
+NIACL,New India Assurance,Insurance,Large Cap
+GICRE,General Insurance Corp of India,Insurance,Large Cap
+MAXFIN,Max Financial Services,Insurance,Mid Cap
+STARHEALTH,Star Health & Allied Insurance,Insurance,Mid Cap
+GODIGIT,Go Digit General Insurance,Insurance,Mid Cap
+MEDIASSIST,Medi Assist Healthcare Services,Healthcare,Small Cap
+MMTC,MMTC,Diversified,Small Cap
+BALMERLAWRI,Balmer Lawrie & Co,Diversified,Small Cap
+BBTC,Bombay Burmah Trading Corp,Diversified,Small Cap
+ZUARI,Zuari Agro Chemicals,Chemicals,Small Cap
+KSCL,Kaveri Seed Company,Agri,Small Cap
+MANGCHEFER,Mangalore Chemicals & Fertilisers,Chemicals,Small Cap
+NFL,National Fertilizers,Chemicals,Small Cap
+RCF,Rashtriya Chemicals & Fertilizers,Chemicals,Mid Cap
+FACT,Fertilisers & Chemicals Travancore,Chemicals,Small Cap
+GODREJAGRO,Godrej Agrovet,Agri,Mid Cap
+GSFC,Gujarat State Fertilizers & Chemicals,Chemicals,Mid Cap
+KPIGREEN,KPI Green Energy,Power,Small Cap
+KPENERGY,KP Energy,Power,Small Cap
+PTC,PTC India,Power,Small Cap
+RPOWER,Reliance Power,Power,Small Cap
+JSWHL,JSW Holdings,NBFC,Mid Cap
+GULFOILLUB,Gulf Oil Lubricants India,Energy,Small Cap
+CHENNPETRO,Chennai Petroleum Corp,Energy,Small Cap
+MRPL,Mangalore Refinery & Petrochemicals,Energy,Mid Cap
+ELECTCAST,Electrosteel Castings,Metals,Small Cap
+TINPLATE,Tinplate Co of India,Metals,Small Cap
+JTLIND,JTL Industries,Metals,Small Cap
+SHIVALIK,Shivalik Bimetal Controls,Metals,Small Cap
+JINDWORLD,Jindal Worldwide,Textiles,Small Cap
+MUKANDLTD,Mukand,Metals,Small Cap
+ARVSMART,Arvind SmartSpaces,Realty,Small Cap
+TARC,TARC,Realty,Small Cap
+SAMHI,SAMHI Hotels,Hospitality,Small Cap
+KAMATHOTEL,Kamat Hotels India,Hospitality,Small Cap
+BARBEQUE,Barbeque-Nation Hospitality,QSR,Small Cap
+TMB,Tamilnad Mercantile Bank,Banking,Small Cap
+SURYODAY,Suryoday Small Finance Bank,Banking,Small Cap
+ESAFSFB,ESAF Small Finance Bank,Banking,Small Cap
+CAPITALSFB,Capital Small Finance Bank,Banking,Small Cap
+CENTRALBK,Central Bank of India,Banking,Small Cap
+PSB,Punjab & Sind Bank,Banking,Small Cap
+BANKINDIA,Bank of India,Banking,Mid Cap
+SUPRIYA,Supriya Lifescience,Pharma,Small Cap
+ENTERO,Entero Healthcare Solutions,Healthcare,Small Cap
+KILITCH,Kilitch Drugs India,Pharma,Small Cap
+AKUMS,Akums Drugs & Pharmaceuticals,Pharma,Small Cap
+HCG,Healthcare Global Enterprises,Healthcare,Small Cap
+ARTEMISMED,Artemis Medicare Services,Healthcare,Small Cap
+TTKHLTCARE,TTK Healthcare,Pharma,Small Cap
+AVALON,Avalon Technologies,EMS,Small Cap
+BAJAJELEC,Bajaj Electricals,Consumer Durables,Small Cap
+HEG,HEG,Capital Goods,Small Cap
+GRAPHITE,Graphite India,Capital Goods,Small Cap
+IFGLEXPOR,IFGL Refractories,Capital Goods,Small Cap
+PRICOL,Pricol,Auto Ancillary,Small Cap
+STERTOOLS,Sterling Tools,Auto Ancillary,Small Cap
+ESTERINDUS,Ester Industries,Chemicals,Small Cap
+JISLJALEQS,Jain Irrigation Systems,Capital Goods,Small Cap
+PRSMJOHNSN,Prism Johnson,Cement,Small Cap
+NCLIND,NCL Industries,Cement,Small Cap
+POLYPLEX,Polyplex Corp,Packaging,Small Cap
+JINDALPOLY,Jindal Poly Films,Packaging,Small Cap
+COSMOFIRST,Cosmo First,Packaging,Small Cap
+UFLEX,UFLEX,Packaging,Small Cap
+SCI,Shipping Corp of India,Logistics,Small Cap
+TVTODAY,TV Today Network,Media,Small Cap
+HATHWAY,Hathway Cable & Datacom,Media,Small Cap
+DBCORP,D B Corp,Media,Small Cap
+JAGRAN,Jagran Prakashan,Media,Small Cap
+ENIL,Entertainment Network India,Media,Small Cap
+OLECTRA,Olectra Greentech,Auto,Small Cap
+JBMA,JBM Auto,Auto Ancillary,Small Cap
+FORCEMOT,Force Motors,Auto,Small Cap
+ATULAUTO,Atul Auto,Auto,Small Cap
+MAHSCOOTER,Maharashtra Scooters,NBFC,Small Cap
+RAMCOSYS,Ramco Systems,IT,Small Cap
+TRIGYN,Trigyn Technologies,IT,Small Cap
+GENESYS,Genesys International,IT,Small Cap
+PARAGMILK,Parag Milk Foods,FMCG,Small Cap
+REDINGTON,Redington,Distribution,Small Cap
+SHAILY,Shaily Engineering Plastics,Plastics,Small Cap
+NAVNETEDUL,Navneet Education,Education,Small Cap
+ITDC,India Tourism Development Corp,Hospitality,Small Cap
+MSTC,MSTC,Diversified,Small Cap
+TBOTEK,TBO Tek,Travel,Small Cap
+ETHOSLTD,Ethos,Retail,Small Cap
+TBZ,Tribhovandas Bhimji Zaveri,Retail,Small Cap
+VAIBHAVGBL,Vaibhav Global,Retail,Small Cap
+V2RETAIL,V2 Retail,Retail,Small Cap
+SAMMANCAP,Sammaan Capital,NBFC,Small Cap
+BIRLAMONEY,Aditya Birla Money,Capital Markets,Small Cap
+INDOSTAR,IndoStar Capital Finance,NBFC,Small Cap
+IIFLSEC,IIFL Securities,Capital Markets,Small Cap
+CARTRADE,CarTrade Tech,Internet,Small Cap
+GRINFRA,G R Infraprojects,Infrastructure,Small Cap
+HCC,Hindustan Construction Co,Infrastructure,Small Cap
+ASHOKA,Ashoka Buildcon,Infrastructure,Small Cap
+IONEXCHANG,Ion Exchange India,Chemicals,Small Cap
+BAJAJHIND,Bajaj Hindusthan Sugar,Sugar,Small Cap
+BALRAMCHIN,Balrampur Chini Mills,Sugar,Small Cap
+DALMIASUG,Dalmia Bharat Sugar & Industries,Sugar,Small Cap
+ELGIRUBCO,Elgi Rubber Company,Capital Goods,Small Cap
+HONDAPOWER,Honda India Power Products,Capital Goods,Small Cap
+INDIAGLYCO,India Glycols,Chemicals,Small Cap
