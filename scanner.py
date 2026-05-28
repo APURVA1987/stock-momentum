@@ -1225,6 +1225,7 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
         "coiled": coiled_df, "fresh": fresh_df,
         "rejected": rejected_df, "failed": failed,
         "all_stocks": all_df, "sector_rotation": sector_rotation,
+        "price_data": data,   # in-memory OHLCV cache for the Deep-Dive chart
         "sector_strength": sector_df, "top_sectors": top_sectors,
         "regime": regime, "nifty_context": ctx,
         "universe_count": total,

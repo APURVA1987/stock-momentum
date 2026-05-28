@@ -251,6 +251,52 @@ The classification then sorts these into Strong / Wait / Watchlist / Rejected.
 
 ---
 
+## Privacy & access control
+
+The momentum / value scans are public to anyone with the app URL.
+The **My Holdings overlay is gated by a password** so your portfolio is
+not exposed when you share the link with friends:
+
+1. On Streamlit Cloud, open **Manage app -> Settings -> Secrets** and add:
+   ```
+   APP_PASSWORD = "your-private-password"
+   ```
+2. Reboot the app. The **My Holdings** tab disappears for un-authenticated
+   visitors and the holdings file is not loaded.
+3. The owner enters the password in the sidebar (**My Holdings (Zerodha)**)
+   to unlock - holdings then load, combine into the scan, render in the tab,
+   appear in the export, and show in the Claude prompt.
+
+If `APP_PASSWORD` is not set in secrets, the gate is OFF (zero-friction
+single-user / local use). For full app-wide privacy, switch the Streamlit
+Cloud app to a private app under **Settings -> Sharing** (requires a paid
+plan).
+
+## NSE constituent files - now persistent
+
+Once you upload an `ind_nifty100list` / `ind_niftymidcap150list` /
+`ind_niftysmallcap250list` CSV in the sidebar, it is saved as the default
+under `data/nse_<cap>.csv` and re-used automatically on every future
+session. When ANY NSE file is present (uploaded or saved default), it
+**overrides** the in-repo `universe.csv`, so a smaller curated NSE-only
+universe is used instead of the larger fallback list.
+
+## Scan focus (reduce on-screen clutter)
+
+The sidebar has a **Scan focus** selector:
+
+- *All (Momentum + Value)* - shows every tab (default).
+- *Momentum only* - hides the Technical Value Scanner tab.
+- *Value only* - hides Strong Breakout, Wait, Coiled, Fresh, Do Not Chase,
+  Momentum Map and RS Leaders.
+
+Scan time and exports are unchanged - this is a UI filter only.
+
+In the **Momentum + Value Matrix** tab, the *Mixed* quadrant (stocks that
+are average on both axes) is filtered out. Only the four meaningful
+quadrants are shown - **Best Crossover**, **Momentum Leader**, **Value
+Recovery**, **Avoid**.
+
 ## Technical Value Scanner & Momentum + Value Matrix (Phase 2)
 
 A second engine on the same scan that finds **corrected / stabilising / reclaiming**

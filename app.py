@@ -28,8 +28,43 @@ OUTPUTS_DIR = os.path.join(BASE_DIR, "outputs")
 DEFAULT_UNIVERSE = os.path.join(BASE_DIR, "universe.csv")
 DATA_DIR = os.path.join(BASE_DIR, "data")
 HOLDINGS_PATH = os.path.join(DATA_DIR, "holdings_latest.xlsx")
+NSE_DEFAULT_PATHS = {                                     # Persistent NSE constituent files
+    "Large Cap": os.path.join(DATA_DIR, "nse_large.csv"),
+    "Mid Cap":   os.path.join(DATA_DIR, "nse_mid.csv"),
+    "Small Cap": os.path.join(DATA_DIR, "nse_small.csv")}
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def _holdings_authed() -> bool:
+    """Holdings stay private unless the visitor enters the access password
+    configured in `st.secrets["APP_PASSWORD"]`. If no password is set in
+    secrets (e.g. running locally), access is allowed by default so the owner
+    has zero-friction use of their own machine."""
+    if st.session_state.get("holdings_auth"):
+        return True
+    pw_required = ""
+    try:
+        pw_required = st.secrets.get("APP_PASSWORD", "")
+    except Exception:
+        pw_required = ""
+    if not pw_required:
+        st.session_state["holdings_auth"] = True
+        return True
+    return False
+
+
+def _save_default_upload(uploaded, path: str) -> bool:
+    """Persist any st.file_uploader file to `path`. Returns True on success."""
+    if uploaded is None:
+        return False
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(uploaded.getvalue())
+        return True
+    except Exception:
+        return False
 
 st.set_page_config(page_title="NSE Momentum Breakout Dashboard", layout="wide")
 
@@ -177,41 +212,85 @@ uploaded = st.sidebar.file_uploader("Upload universe.csv (optional)", type=["csv
 # of these slots is filled, it OVERRIDES the universe.csv / single-file upload.
 with st.sidebar.expander("Or: upload NSE index CSVs (one per cap tier)"):
     st.caption("Drop the ind_nifty100list / ind_niftymidcap150list / "
-               "ind_niftysmallcap250list CSVs from niftyindices.com here.")
+               "ind_niftysmallcap250list CSVs from niftyindices.com here. "
+               "Files are saved as defaults and re-used on the next session.")
     nse_large = st.file_uploader("Large Cap file", type="csv", key="nse_large")
     nse_mid = st.file_uploader("Mid Cap file", type="csv", key="nse_mid")
     nse_small = st.file_uploader("Small Cap file", type="csv", key="nse_small")
-NSE_FILES = [(nse_large, "Large Cap"), (nse_mid, "Mid Cap"), (nse_small, "Small Cap")]
-
-# --- My Holdings (Zerodha) -----------------------------------------------------
-# Drop in the Zerodha holdings file; it is saved as the default for next time.
-with st.sidebar.expander("My Holdings (Zerodha)"):
-    fhold = st.file_uploader("Upload holdings (.xlsx / .xls / .csv)",
-                             type=["xlsx", "xls", "csv"], key="zhold")
-    if fhold is not None:
-        # Save under data/holdings_latest.* keeping the uploader's extension.
-        ext = os.path.splitext(fhold.name)[1].lower() or ".xlsx"
-        save_path = os.path.join(DATA_DIR, "holdings_latest" + ext)
-        if H.save_persistent(fhold, save_path):
-            st.session_state["holdings_path"] = save_path
-            st.success(f"Saved as default -> {os.path.basename(save_path)}")
-    saved = st.session_state.get("holdings_path") or (
-        HOLDINGS_PATH if os.path.exists(HOLDINGS_PATH) else
-        next((os.path.join(DATA_DIR, f) for f in os.listdir(DATA_DIR)
-              if f.startswith("holdings_latest")), None) if os.path.isdir(DATA_DIR) else None)
-    if saved and os.path.exists(saved):
-        st.caption(f"Using saved holdings: {os.path.basename(saved)}")
-
-# Load + normalise the saved holdings (if any).
-_saved = st.session_state.get("holdings_path")
-if not _saved:
-    for ext in (".xlsx", ".xls", ".csv"):
-        p = os.path.join(DATA_DIR, "holdings_latest" + ext)
+    # Persist any fresh upload to data/ and report which slot is currently in use.
+    for upl, cap in [(nse_large, "Large Cap"), (nse_mid, "Mid Cap"), (nse_small, "Small Cap")]:
+        if upl is not None and _save_default_upload(upl, NSE_DEFAULT_PATHS[cap]):
+            st.caption(f"Saved as default -> {os.path.basename(NSE_DEFAULT_PATHS[cap])}")
+    for cap, p in NSE_DEFAULT_PATHS.items():
         if os.path.exists(p):
-            _saved = p
-            break
-holdings_norm = (H.normalise_holdings(H.load_persistent(_saved))
-                 if _saved and os.path.exists(_saved) else pd.DataFrame())
+            st.caption(f"Using saved {cap}: {os.path.basename(p)}")
+
+
+def _nse_slot(uploaded, cap):
+    """Use a fresh upload if provided; otherwise fall back to the saved default."""
+    if uploaded is not None:
+        return uploaded
+    p = NSE_DEFAULT_PATHS[cap]
+    return p if os.path.exists(p) else None
+
+
+NSE_FILES = [(_nse_slot(nse_large, "Large Cap"), "Large Cap"),
+             (_nse_slot(nse_mid, "Mid Cap"), "Mid Cap"),
+             (_nse_slot(nse_small, "Small Cap"), "Small Cap")]
+
+# --- My Holdings (Zerodha) - private; needs password if APP_PASSWORD is set ---
+# The holdings file is saved as the default for next time. The whole holdings
+# overlay (load + combine + display + export + Claude prompt) is gated by the
+# password so anyone with the URL can use the scanner but only the owner sees
+# the portfolio.
+with st.sidebar.expander("My Holdings (Zerodha)"):
+    # Password gate (no-op if APP_PASSWORD secret is empty - local single-user use).
+    try:
+        _pw_set = bool(st.secrets.get("APP_PASSWORD", ""))
+    except Exception:
+        _pw_set = False
+    if _pw_set and not st.session_state.get("holdings_auth"):
+        pw_try = st.text_input("Holdings access password", type="password", key="hold_pw")
+        if pw_try:
+            try:
+                if pw_try == st.secrets.get("APP_PASSWORD", ""):
+                    st.session_state["holdings_auth"] = True
+                    st.success("Unlocked.")
+                else:
+                    st.error("Wrong password.")
+            except Exception:
+                st.error("Could not read APP_PASSWORD from secrets.")
+    if _holdings_authed():
+        fhold = st.file_uploader("Upload holdings (.xlsx / .xls / .csv)",
+                                 type=["xlsx", "xls", "csv"], key="zhold")
+        if fhold is not None:
+            ext = os.path.splitext(fhold.name)[1].lower() or ".xlsx"
+            save_path = os.path.join(DATA_DIR, "holdings_latest" + ext)
+            if H.save_persistent(fhold, save_path):
+                st.session_state["holdings_path"] = save_path
+                st.success(f"Saved as default -> {os.path.basename(save_path)}")
+        saved = st.session_state.get("holdings_path") or (
+            HOLDINGS_PATH if os.path.exists(HOLDINGS_PATH) else
+            next((os.path.join(DATA_DIR, f) for f in os.listdir(DATA_DIR)
+                  if f.startswith("holdings_latest")), None)
+            if os.path.isdir(DATA_DIR) else None)
+        if saved and os.path.exists(saved):
+            st.caption(f"Using saved holdings: {os.path.basename(saved)}")
+    else:
+        st.caption("Locked. Enter the password to load/upload holdings.")
+
+# Load + normalise the saved holdings ONLY if the visitor is authenticated.
+holdings_norm = pd.DataFrame()
+if _holdings_authed():
+    _saved = st.session_state.get("holdings_path")
+    if not _saved:
+        for ext in (".xlsx", ".xls", ".csv"):
+            p = os.path.join(DATA_DIR, "holdings_latest" + ext)
+            if os.path.exists(p):
+                _saved = p
+                break
+    if _saved and os.path.exists(_saved):
+        holdings_norm = H.normalise_holdings(H.load_persistent(_saved))
 cap_choice = st.sidebar.selectbox(
     "Market cap category",
     ["All", "Large Cap only", "Mid Cap only", "Small Cap only",
@@ -228,6 +307,10 @@ local_mode = st.sidebar.checkbox(
          "cache (fast repeat runs) and overlays the latest official NSE bhavcopy "
          "day on top of Yahoo history. Leave OFF on Streamlit Cloud (NSE blocks "
          "cloud servers).")
+scan_focus = st.sidebar.selectbox(
+    "Scan focus", ["All (Momentum + Value)", "Momentum only", "Value only"],
+    index=0, help="Filters which tabs are shown to reduce on-screen clutter. "
+                  "Scan time is unchanged - all signals are still computed.")
 run_clicked = st.sidebar.button("Run Scan", type="primary")
 
 
@@ -276,6 +359,8 @@ if run_clicked:
     status.empty()
     st.session_state["result"] = result
     st.session_state["period"] = period
+    # Keep the in-memory OHLCV cache so the Deep-Dive chart never re-downloads.
+    st.session_state["price_data"] = result.get("price_data") or {}
     # Build the holdings-vs-momentum overlay (re-used by the My Holdings tab).
     st.session_state["holdings_df"] = (
         H.merge_with_scan(holdings_norm, result.get("all_stocks"))
@@ -422,8 +507,15 @@ def export_dashboard_summary(result, overext):
 # CANDLESTICK (price + MAs + 52W high + trigger + invalidation + Vol + RSI + ADX)
 # =============================================================================
 def make_stock_chart(symbol_ns, period, trigger=None, invalidation=None):
-    df = cached_history(symbol_ns, period)
-    if df.empty:
+    # Prefer the OHLCV already downloaded during the scan (instant, no re-fetch).
+    # That fixes the "Deep Dive goes blank when I change stock" issue, because
+    # selecting a different symbol no longer triggers a network call.
+    cached = st.session_state.get("price_data") or {}
+    sym = symbol_ns.replace(".NS", "")
+    df = cached.get(sym)
+    if df is None or df.empty:
+        df = cached_history(symbol_ns, period)
+    if df is None or df.empty:
         st.warning("No chart data available for this symbol.")
         return
     close = df["Close"]
@@ -536,12 +628,44 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     fresh = result.get("fresh", pd.DataFrame())
 
     # Name-keyed tabs (order can change without breaking the blocks below).
-    tab_names = ["My Holdings", "Market Overview", "Sector Rotation", "RS Leaders",
+    # ---- Tab visibility driven by sidebar "Scan focus" ----
+    _ALL_TABS = ["My Holdings", "Market Overview", "Sector Rotation", "RS Leaders",
                  "Strong Breakout", "Wait for Confirmation", "Coiled / Ready",
                  "Fresh Momentum", "Early Watchlist", "Do Not Chase", "Momentum Map",
                  "Technical Value Scanner", "Momentum + Value Matrix",
                  "Stock Deep Dive", "Rejected / Failed", "Claude Review", "Export"]
-    T = dict(zip(tab_names, st.tabs(tab_names)))
+    if scan_focus == "Momentum only":
+        _hidden = {"Technical Value Scanner"}
+    elif scan_focus == "Value only":
+        _hidden = {"Strong Breakout", "Wait for Confirmation", "Coiled / Ready",
+                   "Fresh Momentum", "Do Not Chase", "Momentum Map", "RS Leaders"}
+    else:
+        _hidden = set()
+    if not _holdings_authed():                # holdings tab vanishes if locked
+        _hidden.add("My Holdings")
+    tab_names = [t for t in _ALL_TABS if t not in _hidden]
+
+    # Tab dict with a "no-op tab" fallback for hidden names.
+    # When a tab is hidden, `with T["X"]:` enters a one-shot st.empty() container
+    # and clears it on exit, so the existing block bodies don't need rewriting.
+    class _NullTab:
+        def __enter__(self):
+            self._ph = st.empty()
+            self._ctx = self._ph.container()
+            self._ctx.__enter__()
+            return self
+        def __exit__(self, exc_type, exc_val, tb):
+            try:
+                self._ctx.__exit__(exc_type, exc_val, tb)
+            finally:
+                self._ph.empty()
+
+    class _TabDict(dict):
+        def __getitem__(self, k):
+            return super().__getitem__(k) if k in self else _NullTab()
+        def __contains__(self, k):
+            return dict.__contains__(self, k)
+    T = _TabDict(zip(tab_names, st.tabs(tab_names)))
     holdings_df = st.session_state.get("holdings_df", pd.DataFrame())
 
     # =====================================================================
@@ -808,9 +932,9 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                                          hover_name="Symbol", title="Risk vs Reward (bubble = volume)",
                                          size_max=30),
                               use_container_width=True)
-            # D. Detailed table
-            with st.expander("Detailed table"):
-                df_with_links(strong, list(strong.columns), height=420)
+            # D. Detailed table - full list, always open by default.
+            st.subheader(f"All Strong Breakout stocks ({len(strong)})")
+            df_with_links(strong, list(strong.columns), height=520)
 
     # =====================================================================
     # 3) WAIT FOR CONFIRMATION
@@ -851,7 +975,8 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                           "Score", "Risk Level"]
             tbl = wd.sort_values(["Distance to Trigger %", "Score", "Relative Strength %"],
                                  ascending=[True, False, False])
-            df_with_links(tbl, alert_cols, height=420)
+            st.subheader(f"All Wait-for-Confirmation stocks ({len(tbl)})")
+            df_with_links(tbl, alert_cols, height=520)
 
     # =====================================================================
     # 4) EARLY WATCHLIST
@@ -870,8 +995,8 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                                    orientation="h", title="Top early setups by score",
                                    color="Score", color_continuous_scale="Blues"),
                             use_container_width=True)
-            with st.expander("Detailed table"):
-                st.dataframe(watch, use_container_width=True, height=400)
+            st.subheader(f"All Early-Watchlist stocks ({len(watch)})")
+            st.dataframe(watch, use_container_width=True, height=520)
 
     # =====================================================================
     # SECTOR ROTATION (percentile-ranked sector strength engine)
@@ -1211,13 +1336,15 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         if "Value Score" not in allstocks.columns or "Composite Score" not in allstocks.columns or allstocks.empty:
             st.info("Run a scan to build the matrix.")
         else:
+            st.caption("Showing the 4 meaningful quadrants only. 'Mixed' "
+                       "(average on both axes) is filtered out as noise.")
             cnt = allstocks["Matrix Class"].value_counts().to_dict() if "Matrix Class" in allstocks else {}
-            mc = st.columns(5)
+            mc = st.columns(4)
             for col, key in zip(mc, ["Best Crossover", "Momentum Leader",
-                                     "Value Recovery", "Mixed", "Avoid"]):
+                                     "Value Recovery", "Avoid"]):
                 metric_card(col, key, cnt.get(key, 0), MATRIX_COLORS.get(key, "#555"))
 
-            scat = allstocks.copy()
+            scat = allstocks[allstocks.get("Matrix Class") != "Mixed"].copy()
             scat["Volume Ratio"] = pd.to_numeric(scat["Volume Ratio"], errors="coerce").fillna(1.0).clip(lower=0.1)
             fig = px.scatter(
                 scat, x="Value Score", y="Composite Score", size="Volume Ratio",
@@ -1225,7 +1352,8 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                 hover_name="Symbol",
                 hover_data=["Company", "Sector", "Classification", "Value Classification",
                             "Value Entry Style", "Risk Level"],
-                title="Momentum (Y) vs Value (X) - bubble = volume ratio", size_max=28)
+                title="Momentum (Y) vs Value (X) - bubble = volume ratio "
+                      "(Mixed quadrant hidden)", size_max=28)
             # Quadrant guides at 65 / 70 thresholds.
             fig.add_hline(y=65, line_dash="dot", line_color="grey")
             fig.add_vline(x=65, line_dash="dot", line_color="grey")
