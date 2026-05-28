@@ -19,13 +19,17 @@ import streamlit as st
 
 import scanner
 import indicators as ind
+import holdings as H
 import fundamentals
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUTS_DIR = os.path.join(BASE_DIR, "outputs")
 DEFAULT_UNIVERSE = os.path.join(BASE_DIR, "universe.csv")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+HOLDINGS_PATH = os.path.join(DATA_DIR, "holdings_latest.xlsx")
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
 
 st.set_page_config(page_title="NSE Momentum Breakout Dashboard", layout="wide")
 
@@ -120,6 +124,9 @@ def parse_nse_constituent(file, cap_label: str) -> pd.DataFrame:
         "sector": df[ind].astype(str).str.strip() if (ind and ind in df.columns) else "-",
         "market_cap_category": cap_label,
     })
+    # Drop placeholder/demerger stub symbols (e.g. DUMMYVEDL1) - they have no
+    # Yahoo data and just clutter the "Failed Tickers" list.
+    out = out[~out["symbol"].astype(str).str.upper().str.startswith("DUMMY")]
     return out[out["symbol"].astype(str).str.len() > 0].reset_index(drop=True)
 
 
@@ -175,6 +182,36 @@ with st.sidebar.expander("Or: upload NSE index CSVs (one per cap tier)"):
     nse_mid = st.file_uploader("Mid Cap file", type="csv", key="nse_mid")
     nse_small = st.file_uploader("Small Cap file", type="csv", key="nse_small")
 NSE_FILES = [(nse_large, "Large Cap"), (nse_mid, "Mid Cap"), (nse_small, "Small Cap")]
+
+# --- My Holdings (Zerodha) -----------------------------------------------------
+# Drop in the Zerodha holdings file; it is saved as the default for next time.
+with st.sidebar.expander("My Holdings (Zerodha)"):
+    fhold = st.file_uploader("Upload holdings (.xlsx / .xls / .csv)",
+                             type=["xlsx", "xls", "csv"], key="zhold")
+    if fhold is not None:
+        # Save under data/holdings_latest.* keeping the uploader's extension.
+        ext = os.path.splitext(fhold.name)[1].lower() or ".xlsx"
+        save_path = os.path.join(DATA_DIR, "holdings_latest" + ext)
+        if H.save_persistent(fhold, save_path):
+            st.session_state["holdings_path"] = save_path
+            st.success(f"Saved as default -> {os.path.basename(save_path)}")
+    saved = st.session_state.get("holdings_path") or (
+        HOLDINGS_PATH if os.path.exists(HOLDINGS_PATH) else
+        next((os.path.join(DATA_DIR, f) for f in os.listdir(DATA_DIR)
+              if f.startswith("holdings_latest")), None) if os.path.isdir(DATA_DIR) else None)
+    if saved and os.path.exists(saved):
+        st.caption(f"Using saved holdings: {os.path.basename(saved)}")
+
+# Load + normalise the saved holdings (if any).
+_saved = st.session_state.get("holdings_path")
+if not _saved:
+    for ext in (".xlsx", ".xls", ".csv"):
+        p = os.path.join(DATA_DIR, "holdings_latest" + ext)
+        if os.path.exists(p):
+            _saved = p
+            break
+holdings_norm = (H.normalise_holdings(H.load_persistent(_saved))
+                 if _saved and os.path.exists(_saved) else pd.DataFrame())
 cap_choice = st.sidebar.selectbox(
     "Market cap category",
     ["All", "Large Cap only", "Mid Cap only", "Small Cap only",
@@ -211,11 +248,14 @@ def filter_by_cap(df, choice):
 
 if run_clicked:
     universe = load_universe(uploaded, NSE_FILES)
-    if universe.empty:
+    if universe.empty and (holdings_norm is None or holdings_norm.empty):
         st.stop()
-    universe = filter_by_cap(universe, cap_choice)
+    universe = filter_by_cap(universe, cap_choice) if not universe.empty else universe
+    # Always include holding symbols in the scan, even if they are outside the
+    # selected universe / cap filter (Universe + Holding overlay).
+    universe = H.combine_universe_holdings(universe, holdings_norm)
     if universe.empty:
-        st.warning("No stocks match the selected market cap category.")
+        st.warning("No stocks to scan (empty universe and no holdings).")
         st.stop()
     st.info(f"Scanning {len(universe)} stocks for period {period} ...")
     progress = st.progress(0.0)
@@ -236,6 +276,10 @@ if run_clicked:
     status.empty()
     st.session_state["result"] = result
     st.session_state["period"] = period
+    # Build the holdings-vs-momentum overlay (re-used by the My Holdings tab).
+    st.session_state["holdings_df"] = (
+        H.merge_with_scan(holdings_norm, result.get("all_stocks"))
+        if holdings_norm is not None and not holdings_norm.empty else pd.DataFrame())
 
 
 # =============================================================================
@@ -267,7 +311,7 @@ def _write_workbook(path, sheets: dict):
     return path
 
 
-def export_outputs(result):
+def export_outputs(result, holdings_df=None):
     strong, wait = result["strong"], result["wait"]
     watch, rejected = result["watchlist"], result["rejected"]
     sector, ctx = result["sector_strength"], result["nifty_context"]
@@ -295,19 +339,40 @@ def export_outputs(result):
         scanner.build_coiled_prompt(coiled), scanner.build_fresh_prompt(fresh),
         scanner.build_donotchase_prompt(do_not_chase)]})
 
-    xlsx_path = _write_workbook(os.path.join(OUTPUTS_DIR, "scanner_output.xlsx"), {
+    sheets = {
         "Elite_Momentum": elite, "Actionable_Breakout": actionable,
         "Strong_Breakout": strong, "Wait_For_Confirmation": wait,
         "Coiled_Ready": coiled, "Fresh_Momentum": fresh, "Early_Watchlist": watch,
         "RS_Leaders": rs_leaders, "Sector_Rotation": sector_rot,
         "Do_Not_Chase": do_not_chase, "Rejected": rejected,
         "Failed_Tickers": pd.DataFrame({"Failed Tickers": result["failed"]}),
-        "Sector_Strength": sector, "Market_Regime": market, "Claude_Review": claude})
-    for df, fn in [(strong, "strong_breakout.csv"), (wait, "wait_for_confirmation.csv"),
-                   (coiled, "coiled_ready.csv"), (fresh, "fresh_momentum.csv"),
-                   (watch, "early_watchlist.csv"), (rs_leaders, "rs_leaders.csv"),
-                   (sector_rot, "sector_rotation.csv"), (do_not_chase, "do_not_chase.csv"),
-                   (rejected, "rejected_stocks.csv")]:
+        "Sector_Strength": sector, "Market_Regime": market, "Claude_Review": claude}
+    # Holdings sheets (added only if a holdings file was provided this run)
+    if holdings_df is not None and not holdings_df.empty:
+        sheets.update({
+            "My_Holdings_All": holdings_df,
+            "Holdings_In_Momentum": holdings_df[holdings_df["holding_action"].isin(
+                ["Hold / Trail", "Add on Pullback"])],
+            "Holdings_Wait_For_Confirmation": holdings_df[holdings_df["holding_action"]
+                                                          == "Hold, Set Alert"],
+            "Holdings_Weak_Exit_Review": holdings_df[holdings_df["holding_action"].isin(
+                ["Review / Reduce", "Exit Review"])],
+            "Holdings_Do_Not_Chase": holdings_df[holdings_df["holding_action"]
+                                                 == "Do Not Add / Trail Only"],
+            "Portfolio_Summary": pd.DataFrame([H.portfolio_summary(holdings_df)])})
+    xlsx_path = _write_workbook(os.path.join(OUTPUTS_DIR, "scanner_output.xlsx"), sheets)
+    csvs = [(strong, "strong_breakout.csv"), (wait, "wait_for_confirmation.csv"),
+            (coiled, "coiled_ready.csv"), (fresh, "fresh_momentum.csv"),
+            (watch, "early_watchlist.csv"), (rs_leaders, "rs_leaders.csv"),
+            (sector_rot, "sector_rotation.csv"), (do_not_chase, "do_not_chase.csv"),
+            (rejected, "rejected_stocks.csv")]
+    if holdings_df is not None and not holdings_df.empty:
+        csvs += [(holdings_df, "my_holdings_all.csv"),
+                 (holdings_df[holdings_df["holding_action"].isin(
+                     ["Hold / Trail", "Add on Pullback"])], "holdings_in_momentum.csv"),
+                 (holdings_df[holdings_df["holding_action"].isin(
+                     ["Review / Reduce", "Exit Review"])], "holdings_weak_exit_review.csv")]
+    for df, fn in csvs:
         if df is not None and not df.empty:
             df.to_csv(os.path.join(OUTPUTS_DIR, fn), index=False)
     return xlsx_path
@@ -447,11 +512,177 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     fresh = result.get("fresh", pd.DataFrame())
 
     # Name-keyed tabs (order can change without breaking the blocks below).
-    tab_names = ["Market Overview", "Sector Rotation", "RS Leaders", "Strong Breakout",
-                 "Wait for Confirmation", "Coiled / Ready", "Fresh Momentum",
-                 "Early Watchlist", "Do Not Chase", "Momentum Map",
+    tab_names = ["My Holdings", "Market Overview", "Sector Rotation", "RS Leaders",
+                 "Strong Breakout", "Wait for Confirmation", "Coiled / Ready",
+                 "Fresh Momentum", "Early Watchlist", "Do Not Chase", "Momentum Map",
                  "Stock Deep Dive", "Rejected / Failed", "Claude Review", "Export"]
     T = dict(zip(tab_names, st.tabs(tab_names)))
+    holdings_df = st.session_state.get("holdings_df", pd.DataFrame())
+
+    # =====================================================================
+    # MY HOLDINGS (Zerodha overlay on the momentum scanner)
+    # =====================================================================
+    with T["My Holdings"]:
+        if holdings_df is None or holdings_df.empty:
+            st.info("No holdings loaded yet. Upload your Zerodha holdings file "
+                    "in the sidebar (under **My Holdings (Zerodha)**). It will be "
+                    "saved as the default and used on every scan from then on.")
+        else:
+            psum = H.portfolio_summary(holdings_df)
+            # Top portfolio cards (8 metrics)
+            cA = st.columns(4)
+            metric_card(cA[0], "Total Current Value", psum.get("Total Current Value"), "#1f4e79")
+            metric_card(cA[1], "Total Invested", psum.get("Total Invested"), "#37474f")
+            pnl = psum.get("Total P&L", 0)
+            metric_card(cA[2], "Total P&L", pnl, "#1e7d32" if pnl >= 0 else "#8b1e1e")
+            pnl_p = psum.get("Total P&L %", 0)
+            metric_card(cA[3], "Total P&L %", pnl_p, "#1e7d32" if pnl_p >= 0 else "#8b1e1e")
+            cB = st.columns(4)
+            metric_card(cB[0], "Holdings in Momentum", psum.get("Holdings In Momentum"), CLASS_COLORS["Strong Breakout / Actionable"])
+            metric_card(cB[1], "Waiting / Set Alert", psum.get("Holdings Waiting"), CLASS_COLORS["Wait for Confirmation"])
+            metric_card(cB[2], "Weak / Exit Review", psum.get("Holdings Weak / Exit"), CLASS_COLORS["Rejected"])
+            metric_card(cB[3], "Top Holding Weight %", psum.get("Top Holding Weight %"), "#37474f",
+                        sub=f"{psum.get('Holdings Count', 0)} holdings")
+
+            sub = st.tabs(["Portfolio Summary", "In Momentum",
+                           "Waiting for Confirmation", "Weak / Exit Review",
+                           "Do Not Chase", "Holding Deep Dive"])
+
+            # Action-label colours for the sub-tab tables.
+            ACT_COLORS = {
+                "Hold / Trail": "#1e7d32", "Add on Pullback": "#0b6e2e",
+                "Hold, Set Alert": "#e08e0b", "Do Not Add / Trail Only": "#6a1b9a",
+                "Review / Reduce": "#b71c1c", "Exit Review": "#6e0b0b",
+                "Watch Only": "#1f4e79", "No Scanner Data": "#555"}
+
+            def style_holdings(df):
+                def row_style(row):
+                    bg = ACT_COLORS.get(str(row.get("holding_action", "")), "#37474f")
+                    return [f"background-color:{bg};color:white"] * len(row)
+                return df.style.apply(row_style, axis=1)
+
+            holding_cols = ["symbol", "company", "quantity", "avg_cost", "CMP", "ltp",
+                            "invested", "current_value", "pnl", "pnl_pct",
+                            "portfolio_weight_pct", "Classification", "Composite Score",
+                            "RS Score", "Sector", "Sector Status", "Breakout Status",
+                            "Risk Level", "Trigger Price", "Invalidation Level",
+                            "Confirmation Needed", "Pullback Type",
+                            "avg_vs_cmp_pct", "avg_vs_200dma_pct", "cmp_vs_200dma_pct",
+                            "holding_action", "holding_remark"]
+
+            def show_h(df, empty_msg):
+                if df is None or df.empty:
+                    st.info(empty_msg)
+                    return
+                cols = [c for c in holding_cols if c in df.columns]
+                st.dataframe(style_holdings(df[cols]),
+                             use_container_width=True, height=480)
+
+            # ---- A. Portfolio Summary ----
+            with sub[0]:
+                g = st.columns(2)
+                # Allocation pie by sector
+                if "Sector" in holdings_df.columns and "current_value" in holdings_df.columns:
+                    sec_alloc = (holdings_df.groupby("Sector")["current_value"].sum()
+                                 .sort_values(ascending=False).reset_index())
+                    g[0].plotly_chart(px.pie(sec_alloc, names="Sector", values="current_value",
+                                             title="Sector allocation", hole=0.45),
+                                      use_container_width=True)
+                # Weight bar (top 15)
+                if "portfolio_weight_pct" in holdings_df.columns:
+                    top_w = holdings_df.sort_values("portfolio_weight_pct", ascending=True).tail(15)
+                    g[1].plotly_chart(px.bar(top_w, x="portfolio_weight_pct", y="symbol",
+                                             orientation="h", title="Top weights",
+                                             color="portfolio_weight_pct",
+                                             color_continuous_scale="Blues"),
+                                      use_container_width=True)
+                # P&L bar
+                if "pnl" in holdings_df.columns:
+                    pdf = holdings_df.sort_values("pnl", ascending=True)
+                    st.plotly_chart(px.bar(pdf, x="pnl", y="symbol", orientation="h",
+                                           title="P&L by holding", color="pnl",
+                                           color_continuous_scale="RdYlGn"),
+                                    use_container_width=True)
+                # Holding classification donut
+                if "holding_action" in holdings_df.columns:
+                    acts = holdings_df["holding_action"].value_counts().reset_index()
+                    acts.columns = ["Action", "Count"]
+                    st.plotly_chart(px.pie(acts, names="Action", values="Count",
+                                           hole=0.5, title="Holdings by action label",
+                                           color="Action",
+                                           color_discrete_map=ACT_COLORS),
+                                    use_container_width=True)
+                with st.expander("All holdings (full table)"):
+                    show_h(holdings_df, "No holdings.")
+
+            # ---- B. In Momentum ----
+            with sub[1]:
+                st.success("Strong momentum positions. Hold / trail; add only on a "
+                           "controlled pullback or breakout sustain.")
+                show_h(holdings_df[holdings_df["holding_action"].isin(
+                    ["Hold / Trail", "Add on Pullback"])],
+                    "No holdings currently in strong momentum.")
+
+            # ---- C. Waiting for Confirmation ----
+            with sub[2]:
+                st.warning("Setup developing. Hold the existing position and set "
+                           "alerts near trigger price - do not add yet.")
+                show_h(holdings_df[holdings_df["holding_action"] == "Hold, Set Alert"],
+                       "No holdings in Wait / Coiled / Fresh state.")
+
+            # ---- D. Weak / Exit Review ----
+            with sub[3]:
+                st.error("Weak technical structure. Review for reduction; avoid "
+                         "averaging down until the structure improves.")
+                show_h(holdings_df[holdings_df["holding_action"].isin(
+                    ["Review / Reduce", "Exit Review"])],
+                    "No holdings flagged Weak / Exit Review.")
+
+            # ---- E. Do Not Chase ----
+            with sub[4]:
+                st.warning("Strong but overextended. Trail SL on what you hold; "
+                           "DO NOT add fresh until risk-reward improves.")
+                show_h(holdings_df[holdings_df["holding_action"] == "Do Not Add / Trail Only"],
+                       "No holdings currently overextended.")
+
+            # ---- F. Holding Deep Dive ----
+            with sub[5]:
+                if holdings_df.empty:
+                    st.info("Upload holdings to deep-dive.")
+                else:
+                    pick = st.selectbox("Select holding", holdings_df["symbol"].tolist(),
+                                        key="hold_deepdive")
+                    r = holdings_df[holdings_df["symbol"] == pick].iloc[0]
+                    cls = str(r.get("Classification", "")) or "No Scanner Data"
+                    action = str(r.get("holding_action", "")) or "No Scanner Data"
+                    st.markdown(
+                        f"### {r['symbol']} - {r.get('company', '')}<br>"
+                        f"{badge(action, ACT_COLORS.get(action, '#555'))} &nbsp; "
+                        f"{badge(cls, CLASS_COLORS.get(cls, '#555'))}",
+                        unsafe_allow_html=True)
+                    st.caption(r.get("holding_remark", ""))
+                    dc = st.columns(5)
+                    metric_card(dc[0], "Qty", r.get("quantity"), "#37474f")
+                    metric_card(dc[1], "Avg Cost", r.get("avg_cost"), "#37474f")
+                    metric_card(dc[2], "CMP / LTP", r.get("CMP") if pd.notna(r.get("CMP")) else r.get("ltp"), "#37474f")
+                    pnl_v = r.get("pnl", 0) or 0
+                    metric_card(dc[3], "P&L", pnl_v, "#1e7d32" if pnl_v >= 0 else "#8b1e1e")
+                    pnl_p = r.get("pnl_pct", 0) or 0
+                    metric_card(dc[4], "P&L %", pnl_p, "#1e7d32" if pnl_p >= 0 else "#8b1e1e")
+                    dc2 = st.columns(5)
+                    metric_card(dc2[0], "Composite", r.get("Composite Score", "-"), "#1f4e79")
+                    metric_card(dc2[1], "RS Score", r.get("RS Score", "-"), "#1f4e79")
+                    metric_card(dc2[2], "Sector Rank", r.get("Sector Rank", "-"), "#1f4e79")
+                    metric_card(dc2[3], "Avg vs CMP %", r.get("avg_vs_cmp_pct", "-"), "#37474f")
+                    metric_card(dc2[4], "CMP vs 200DMA %", r.get("cmp_vs_200dma_pct", "-"), "#37474f")
+                    st.write(f"Trigger: {r.get('Trigger Price', '-')} | "
+                             f"Invalidation/SL: {r.get('Invalidation Level', '-')} | "
+                             f"Confirmation: {r.get('Confirmation Needed', '-')}")
+                    # Chart with avg-buy line
+                    if pd.notna(r.get("CMP")):
+                        make_stock_chart(f"{pick}.NS", period,
+                                         trigger=r.get("Trigger Price"),
+                                         invalidation=r.get("Invalidation Level"))
 
     # =====================================================================
     # 1) MARKET OVERVIEW
@@ -919,6 +1150,27 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         st.subheader("5. Do Not Chase")
         st.code(scanner.build_donotchase_prompt(do_not_chase), language="text")
 
+        # ---- 6. My Holdings Review (Phase-1 addition) ----
+        if holdings_df is not None and not holdings_df.empty:
+            st.subheader("6. My Holdings Review")
+            lines = [
+                ("Review my NSE Zerodha holdings. For each: classify as Hold, "
+                 "Trail, Add only on confirmation, Reduce, or Exit Review. Use "
+                 "the action label + technical context provided. DO NOT recommend "
+                 "blind averaging down. Flag risk concentration if any single "
+                 "holding > 15% of portfolio.\n")]
+            for _, r in holdings_df.iterrows():
+                lines.append(
+                    f"- {r['symbol']} (qty {r.get('quantity', '-')}, "
+                    f"avg {r.get('avg_cost', '-')}, CMP {r.get('CMP') if pd.notna(r.get('CMP')) else r.get('ltp', '-')}, "
+                    f"P&L% {r.get('pnl_pct', '-')}, wt {r.get('portfolio_weight_pct', '-')}%): "
+                    f"{r.get('Classification', 'No scanner data')}, "
+                    f"Composite {r.get('Composite Score', '-')}, RS {r.get('RS Score', '-')}, "
+                    f"Trigger {r.get('Trigger Price', '-')}, "
+                    f"Invalidation {r.get('Invalidation Level', '-')}, "
+                    f"Action: {r.get('holding_action', '-')}")
+            st.code("\n".join(lines), language="text")
+
     # =====================================================================
     # 10) EXPORT
     # =====================================================================
@@ -929,7 +1181,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         cexp = st.columns(2)
         if cexp[0].button("Save full Excel + CSVs"):
             try:
-                p = export_outputs(result)
+                p = export_outputs(result, holdings_df=holdings_df)
                 st.success(f"Saved: {p} (+ CSV files in outputs/)")
             except Exception as e:
                 st.error(f"Excel export failed: {e}. Use the CSV download buttons below instead.")

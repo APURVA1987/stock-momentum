@@ -251,6 +251,33 @@ The classification then sorts these into Strong / Wait / Watchlist / Rejected.
 
 ---
 
+## My Holdings overlay (Zerodha)
+
+Drop your Zerodha holdings export (`.xlsx` / `.xls` / `.csv`) into the sidebar
+under **My Holdings (Zerodha)**. The file is saved to `data/holdings_latest.*`
+and used as the default on every future scan until you upload a new one.
+
+What happens:
+- Your holding symbols are **always scanned** (even if they are not in
+  `universe.csv` / your uploaded NSE files) - they get a `source_type` of
+  `Holding` or `Universe + Holding`.
+- Each holding is merged with the scanner output (composite score, RS score,
+  sector status, breakout/pullback, trigger, invalidation, risk level) plus
+  cost-vs-MA metrics (`avg_vs_cmp_pct`, `avg_vs_200dma_pct`, `cmp_vs_200dma_pct`).
+- A rule-based **holding_action** is assigned: *Hold / Trail*, *Add on Pullback*,
+  *Hold, Set Alert*, *Do Not Add / Trail Only*, *Review / Reduce*, *Exit Review*,
+  *Watch Only*, or *No Scanner Data*.
+
+A new **"My Holdings"** tab appears at the top of the dashboard with sub-tabs:
+*Portfolio Summary · In Momentum · Waiting for Confirmation · Weak / Exit Review
+· Do Not Chase · Holding Deep Dive*. The export workbook now also includes
+`My_Holdings_All`, `Holdings_In_Momentum`, `Holdings_Wait_For_Confirmation`,
+`Holdings_Weak_Exit_Review`, `Holdings_Do_Not_Chase`, and `Portfolio_Summary`
+sheets, plus matching CSVs. A 6th Claude prompt ("My Holdings Review") is added
+to the Claude Review tab.
+
+---
+
 ## WARNING
 
 This tool is for **educational screening only. It is NOT financial advice.**
