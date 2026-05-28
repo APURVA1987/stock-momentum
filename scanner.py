@@ -28,6 +28,7 @@ import pandas as pd
 import yfinance as yf
 
 import indicators as ind
+import value as V
 
 # Folder for the optional LOCAL price cache (used only in "local mode").
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -387,6 +388,9 @@ def compute_metrics(df: pd.DataFrame, nifty_returns: dict,
         seg = df.tail(k)
         return (float(seg["High"].max()) - float(seg["Low"].min())) / cmp * 100 if cmp > 0 else np.nan
     range_5d, range_10d, range_20d, range_60d = rng_pct(5), rng_pct(10), rng_pct(20), rng_pct(60)
+    range_30d, range_90d = rng_pct(30), rng_pct(90)
+    # Slope of the 50 DMA (Phase-2 value scanner).
+    slope50 = ind.slope_pct(dma50, 30)
     atr50 = float(ind.atr(high, low, close, 50).iloc[-1])
     atr_contraction = (atr14 / atr50) if (atr50 and atr50 > 0) else np.nan
     avg_vol_10, avg_vol_50 = float(volume.tail(10).mean()), float(volume.tail(50).mean())
@@ -427,6 +431,46 @@ def compute_metrics(df: pd.DataFrame, nifty_returns: dict,
     elif days_below_200 > 0 and cmp > ma200:
         ptype = "Broken 200 DMA Recovery"
 
+    # --- PHASE 2: Value-scanner specific metrics ---
+    # Max drawdowns over 6m / 1y (negative pct values).
+    hi_6m = float(close.tail(126).max()) if len(close) >= 126 else high_52w
+    hi_1y = float(close.tail(252).max()) if len(close) >= 252 else high_52w
+    lo_6m = float(close.tail(126).min()) if len(close) >= 126 else cmp
+    lo_1y = float(close.tail(252).min()) if len(close) >= 252 else cmp
+    max_dd_6m = (lo_6m / hi_6m - 1) * 100 if hi_6m > 0 else np.nan
+    max_dd_1y = (lo_1y / hi_1y - 1) * 100 if hi_1y > 0 else np.nan
+
+    # Lower-highs count over the last 10 sessions (mirror of higher_lows).
+    highs10 = high.tail(10).values
+    lower_highs = int(sum(1 for i in range(1, len(highs10)) if highs10[i] < highs10[i - 1]))
+
+    # Fresh 3-month low flag: latest close within 0.5% of the prior 63-day min.
+    recent3m = close.tail(63)
+    fresh_3m_low = bool(len(recent3m) > 5
+                        and close.iloc[-1] <= recent3m.iloc[:-1].min() * 1.005)
+
+    # RSI recovery over the last ~2 weeks.
+    rsi_series = ind.rsi(close, 14)
+    rsi_change_2w = (float(rsi_series.iloc[-1] - rsi_series.iloc[-11])
+                     if rsi_series.dropna().shape[0] > 11 else 0.0)
+
+    # MACD bullish flag (12/26/9, manual EMA).
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    macd_bullish = bool(macd_line.iloc[-1] > signal_line.iloc[-1] and macd_line.iloc[-1] > 0)
+
+    # Up-day volume vs down-day volume over the last 30 days.
+    last30 = df.tail(30)
+    delta30 = last30["Close"].diff()
+    up_v = float(last30["Volume"][delta30 > 0].mean()) if (delta30 > 0).any() else np.nan
+    dn_v = float(last30["Volume"][delta30 < 0].mean()) if (delta30 < 0).any() else np.nan
+    up_down_vol = (up_v / dn_v) if (dn_v and dn_v > 0 and not np.isnan(up_v)) else np.nan
+
+    # Distance from 100 DMA.
+    dist_from_100 = ((cmp / ma100 - 1) * 100) if (ma100 and ma100 > 0) else np.nan
+
     return {
         # display values (rounded)
         "CMP": round(cmp, 2), "20 DMA": round(ma20, 2), "50 DMA": round(ma50, 2),
@@ -465,7 +509,20 @@ def compute_metrics(df: pd.DataFrame, nifty_returns: dict,
         "Range 5D %": round(range_5d, 2) if not np.isnan(range_5d) else np.nan,
         "Range 10D %": round(range_10d, 2) if not np.isnan(range_10d) else np.nan,
         "Range 20D %": round(range_20d, 2) if not np.isnan(range_20d) else np.nan,
+        "Range 30D %": round(range_30d, 2) if not np.isnan(range_30d) else np.nan,
         "Range 60D %": round(range_60d, 2) if not np.isnan(range_60d) else np.nan,
+        "Range 90D %": round(range_90d, 2) if not np.isnan(range_90d) else np.nan,
+        "50 DMA Slope %": round(slope50, 3) if not np.isnan(slope50) else np.nan,
+        "Max Drawdown 6M %": round(max_dd_6m, 2) if not np.isnan(max_dd_6m) else np.nan,
+        "Max Drawdown 1Y %": round(max_dd_1y, 2) if not np.isnan(max_dd_1y) else np.nan,
+        "Lower Highs 10D": lower_highs,
+        "RSI Change 2W": round(rsi_change_2w, 2),
+        "Up/Down Vol Ratio": round(up_down_vol, 2) if not np.isnan(up_down_vol) else np.nan,
+        "Distance from 100 DMA %": round(dist_from_100, 2) if not np.isnan(dist_from_100) else np.nan,
+        "_macd_bullish": macd_bullish,
+        "_fresh_3m_low": fresh_3m_low,
+        "_lower_highs": lower_highs,
+        "_slope50": slope50,
         "ATR 50": round(atr50, 2) if not np.isnan(atr50) else np.nan,
         "ATR Contraction": round(atr_contraction, 2) if not np.isnan(atr_contraction) else np.nan,
         "Volume Dryup 10D": round(vol_dryup_10, 2) if not np.isnan(vol_dryup_10) else np.nan,
@@ -890,7 +947,8 @@ def build_sector_strength(stocks: list) -> pd.DataFrame:
 # -----------------------------------------------------------------------------
 # 7. ROW BUILDER (one full record for a classified stock)
 # -----------------------------------------------------------------------------
-def _build_row(s, m, score, comps, classification, sector_rank_map, min_vol_ratio, regime):
+def _build_row(s, m, score, comps, classification, sector_rank_map, min_vol_ratio,
+               regime, sector_status_map=None):
     risk = risk_level(score, m["Days Below 200 DMA"])
     plan = trade_plan(m)
     trig = trigger_levels(m, risk)
@@ -900,7 +958,7 @@ def _build_row(s, m, score, comps, classification, sector_rank_map, min_vol_rati
     if regime == "Weak":
         remark += " | Trade with caution (weak market)"
 
-    return {
+    row = {
         "Symbol": s["symbol"], "Company": s["company"], "Sector": s["sector"],
         "Market Cap Category": s["cap"], "CMP": m["CMP"], "Score": score,
         "Classification": classification,
@@ -929,6 +987,14 @@ def _build_row(s, m, score, comps, classification, sector_rank_map, min_vol_rati
         "Risk Score": comps["Risk Score"],
         "Final Remark": remark,
     }
+    # Phase 2: value-scanner columns + Matrix class.
+    sec_status = sector_status_map.get(s["sector"], "") if isinstance(
+        sector_status_map, dict) else ""
+    val = V.score_value(m, sector_status=sec_status)
+    row.update(val)
+    row["Matrix Class"] = V.matrix_class(row.get("Composite Score"), val["Value Score"])
+    row["Matrix Remark"] = V.MATRIX_REMARKS.get(row["Matrix Class"], "")
+    return row
 
 
 # -----------------------------------------------------------------------------
@@ -1115,7 +1181,7 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
             "Pullback Depth %": m["Pullback Depth %"], "Recovery Speed Days": m["Recovery Speed Days"],
         }
         rowd = _build_row(s, m, score, comps, classification, sector_rank_map,
-                          min_vol_ratio, regime)
+                          min_vol_ratio, regime, sector_status_map=sector_status_map)
         rowd.update(extra)
         all_rows.append(rowd)
         if is_coiled:

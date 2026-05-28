@@ -339,12 +339,29 @@ def export_outputs(result, holdings_df=None):
         scanner.build_coiled_prompt(coiled), scanner.build_fresh_prompt(fresh),
         scanner.build_donotchase_prompt(do_not_chase)]})
 
+    # Phase 2 value-scanner derived frames
+    def _vsel(cls):
+        if allst is None or allst.empty or "Value Classification" not in allst:
+            return pd.DataFrame()
+        out = allst[allst["Value Classification"] == cls]
+        return out.sort_values("Value Score", ascending=False) if "Value Score" in out else out
+    val_reversal_x = _vsel("Value Reversal Ready")
+    val_base_x = _vsel("Value Base Forming")
+    val_deep_x = _vsel("Deep Value High Risk")
+    val_trap_x = _vsel("Value Trap Avoid")
+    matrix_x = (allst.sort_values(["Composite Score", "Value Score"], ascending=[False, False])
+                if (allst is not None and not allst.empty and "Matrix Class" in allst)
+                else pd.DataFrame())
+
     sheets = {
         "Elite_Momentum": elite, "Actionable_Breakout": actionable,
         "Strong_Breakout": strong, "Wait_For_Confirmation": wait,
         "Coiled_Ready": coiled, "Fresh_Momentum": fresh, "Early_Watchlist": watch,
         "RS_Leaders": rs_leaders, "Sector_Rotation": sector_rot,
         "Do_Not_Chase": do_not_chase, "Rejected": rejected,
+        "Value_Reversal_Ready": val_reversal_x, "Value_Base_Forming": val_base_x,
+        "Deep_Value_High_Risk": val_deep_x, "Value_Trap_Avoid": val_trap_x,
+        "Momentum_Value_Matrix": matrix_x,
         "Failed_Tickers": pd.DataFrame({"Failed Tickers": result["failed"]}),
         "Sector_Strength": sector, "Market_Regime": market, "Claude_Review": claude}
     # Holdings sheets (added only if a holdings file was provided this run)
@@ -360,12 +377,19 @@ def export_outputs(result, holdings_df=None):
             "Holdings_Do_Not_Chase": holdings_df[holdings_df["holding_action"]
                                                  == "Do Not Add / Trail Only"],
             "Portfolio_Summary": pd.DataFrame([H.portfolio_summary(holdings_df)])})
+        if "Value Classification" in holdings_df.columns:
+            sheets["Holdings_Value_Recovery"] = holdings_df[
+                holdings_df["Value Classification"].isin(
+                    ["Value Reversal Ready", "Value Base Forming"])]
     xlsx_path = _write_workbook(os.path.join(OUTPUTS_DIR, "scanner_output.xlsx"), sheets)
     csvs = [(strong, "strong_breakout.csv"), (wait, "wait_for_confirmation.csv"),
             (coiled, "coiled_ready.csv"), (fresh, "fresh_momentum.csv"),
             (watch, "early_watchlist.csv"), (rs_leaders, "rs_leaders.csv"),
             (sector_rot, "sector_rotation.csv"), (do_not_chase, "do_not_chase.csv"),
-            (rejected, "rejected_stocks.csv")]
+            (rejected, "rejected_stocks.csv"),
+            (val_reversal_x, "value_reversal_ready.csv"),
+            (val_base_x, "value_base_forming.csv"),
+            (matrix_x, "momentum_value_matrix.csv")]
     if holdings_df is not None and not holdings_df.empty:
         csvs += [(holdings_df, "my_holdings_all.csv"),
                  (holdings_df[holdings_df["holding_action"].isin(
@@ -515,6 +539,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     tab_names = ["My Holdings", "Market Overview", "Sector Rotation", "RS Leaders",
                  "Strong Breakout", "Wait for Confirmation", "Coiled / Ready",
                  "Fresh Momentum", "Early Watchlist", "Do Not Chase", "Momentum Map",
+                 "Technical Value Scanner", "Momentum + Value Matrix",
                  "Stock Deep Dive", "Rejected / Failed", "Claude Review", "Export"]
     T = dict(zip(tab_names, st.tabs(tab_names)))
     holdings_df = st.session_state.get("holdings_df", pd.DataFrame())
@@ -546,7 +571,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
 
             sub = st.tabs(["Portfolio Summary", "In Momentum",
                            "Waiting for Confirmation", "Weak / Exit Review",
-                           "Do Not Chase", "Holding Deep Dive"])
+                           "Do Not Chase", "Value Recovery", "Holding Deep Dive"])
 
             # Action-label colours for the sub-tab tables.
             ACT_COLORS = {
@@ -645,8 +670,17 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                 show_h(holdings_df[holdings_df["holding_action"] == "Do Not Add / Trail Only"],
                        "No holdings currently overextended.")
 
-            # ---- F. Holding Deep Dive ----
+            # ---- F. Value Recovery (holdings appearing in value scanner) ----
             with sub[5]:
+                st.info("Holdings that are also surfacing as Value Reversal Ready "
+                        "or Value Base Forming - potential recovery candidates.")
+                v_h = holdings_df[holdings_df.get("Value Classification", "").isin(
+                    ["Value Reversal Ready", "Value Base Forming"])] \
+                    if "Value Classification" in holdings_df.columns else pd.DataFrame()
+                show_h(v_h, "No holdings currently in value-recovery setups.")
+
+            # ---- G. Holding Deep Dive ----
+            with sub[6]:
                 if holdings_df.empty:
                     st.info("Upload holdings to deep-dive.")
                 else:
@@ -1017,6 +1051,199 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                              use_container_width=True, height=300)
 
     # =====================================================================
+    # TECHNICAL VALUE SCANNER (Phase 2)
+    # =====================================================================
+    VALUE_COLORS = {
+        "Value Reversal Ready": "#0b6e2e", "Value Base Forming": "#1f4e79",
+        "Deep Value High Risk": "#e08e0b", "Value Trap Avoid": "#8b1e1e"}
+    MATRIX_COLORS = {
+        "Best Crossover": "#0b6e2e", "Momentum Leader": "#1e7d32",
+        "Value Recovery": "#1f4e79", "Mixed": "#37474f", "Avoid": "#8b1e1e"}
+
+    def _vfilter(cls):
+        return (allstocks[allstocks.get("Value Classification") == cls]
+                if "Value Classification" in allstocks.columns else pd.DataFrame())
+
+    val_reversal = _vfilter("Value Reversal Ready").sort_values(
+        "Value Score", ascending=False) if not allstocks.empty else pd.DataFrame()
+    val_base = _vfilter("Value Base Forming").sort_values(
+        "Value Score", ascending=False) if not allstocks.empty else pd.DataFrame()
+    val_deep = _vfilter("Deep Value High Risk").sort_values(
+        "Value Score", ascending=False) if not allstocks.empty else pd.DataFrame()
+    val_trap = _vfilter("Value Trap Avoid") if not allstocks.empty else pd.DataFrame()
+
+    with T["Technical Value Scanner"]:
+        if "Value Score" not in allstocks.columns or allstocks.empty:
+            st.info("Run a scan to populate the value scanner.")
+        else:
+            vc = st.columns(4)
+            metric_card(vc[0], "Reversal Ready", len(val_reversal), VALUE_COLORS["Value Reversal Ready"])
+            metric_card(vc[1], "Base Forming", len(val_base), VALUE_COLORS["Value Base Forming"])
+            metric_card(vc[2], "Deep Value (High Risk)", len(val_deep), VALUE_COLORS["Deep Value High Risk"])
+            metric_card(vc[3], "Value Trap (Avoid)", len(val_trap), VALUE_COLORS["Value Trap Avoid"])
+
+            vsub = st.tabs(["Summary", "Reversal Ready", "Base Forming",
+                            "Deep Value High Risk", "Value Trap Avoid", "Value Deep Dive"])
+
+            VAL_CARD_COLS = [
+                ("CMP", "CMP"), ("Value Score", "Value Score"),
+                ("Composite", "Composite Score"), ("RSI", "RSI 14"),
+                ("Below 52W %", "Distance from 52W High %"),
+                ("Entry", "Value Entry Style"), ("Trigger", "Value Trigger Price"),
+                ("Invalidation", "Value Invalidation Level"), ("Risk", "Risk Level")]
+
+            VAL_TBL_COLS = ["Symbol", "Company", "Sector", "CMP", "Value Score",
+                            "Composite Score", "Value Classification", "Value Entry Style",
+                            "Value Trigger Price", "Value Invalidation Level",
+                            "Value Target Zone", "Distance from 52W High %",
+                            "Distance from 200 DMA %", "RSI 14", "ADX 14",
+                            "Volume Ratio", "Relative Strength %", "Sector Status",
+                            "Risk Level", "Value Remark"]
+
+            def vshow(df, msg):
+                if df is None or df.empty:
+                    st.info(msg); return
+                cols = [c for c in VAL_TBL_COLS if c in df.columns]
+                st.dataframe(df[cols], use_container_width=True, height=440)
+
+            # --- Summary ---
+            with vsub[0]:
+                gv = st.columns(2)
+                # Score distribution
+                vd = allstocks["Value Score"].dropna()
+                bands = {"75-100": int(((vd >= 75)).sum()),
+                         "60-75": int(((vd >= 60) & (vd < 75)).sum()),
+                         "40-60": int(((vd >= 40) & (vd < 60)).sum()),
+                         "<40":   int((vd < 40).sum())}
+                gv[0].plotly_chart(px.bar(pd.DataFrame({"Band": list(bands), "Count": list(bands.values())}),
+                                          x="Band", y="Count", title="Value Score distribution",
+                                          color="Band", color_discrete_sequence=[
+                                              VALUE_COLORS["Value Reversal Ready"], VALUE_COLORS["Value Base Forming"],
+                                              VALUE_COLORS["Deep Value High Risk"], VALUE_COLORS["Value Trap Avoid"]]),
+                                   use_container_width=True)
+                # Top sectors in recovery (Reversal + Base)
+                rec = pd.concat([val_reversal, val_base]) if not (val_reversal.empty and val_base.empty) else pd.DataFrame()
+                if not rec.empty and "Sector" in rec:
+                    sec = rec["Sector"].value_counts().head(8).reset_index()
+                    sec.columns = ["Sector", "Count"]
+                    gv[1].plotly_chart(px.bar(sec, x="Count", y="Sector", orientation="h",
+                                              title="Top sectors in value recovery",
+                                              color_discrete_sequence=["#1f4e79"]),
+                                       use_container_width=True)
+            # --- Reversal Ready ---
+            with vsub[1]:
+                st.success("Recovery confirmed. Consider only after chart/news review.")
+                if not val_reversal.empty:
+                    stock_cards(val_reversal, 5, VALUE_COLORS["Value Reversal Ready"], VAL_CARD_COLS)
+                    st.write("")
+                    st.plotly_chart(px.bar(val_reversal.sort_values("Value Score").tail(20),
+                                           x="Value Score", y="Symbol", orientation="h",
+                                           title="Value Reversal Ready - ranking",
+                                           color="Value Score", color_continuous_scale="Greens"),
+                                    use_container_width=True)
+                vshow(val_reversal, "No Value Reversal Ready candidates.")
+            # --- Base Forming ---
+            with vsub[2]:
+                st.info("Base forming. Set alert above the base resistance / trigger price.")
+                if not val_base.empty:
+                    stock_cards(val_base, 5, VALUE_COLORS["Value Base Forming"], VAL_CARD_COLS)
+                    st.write("")
+                    nb = val_base.copy()
+                    nb["Distance to Trigger %"] = ((nb["Value Trigger Price"] / nb["CMP"] - 1) * 100).round(2)
+                    st.plotly_chart(px.bar(nb.sort_values("Distance to Trigger %").head(15),
+                                           x="Distance to Trigger %", y="Symbol", orientation="h",
+                                           title="Closest to base-breakout trigger",
+                                           color_discrete_sequence=["#1f4e79"]),
+                                    use_container_width=True)
+                vshow(val_base, "No Value Base Forming candidates.")
+            # --- Deep Value High Risk ---
+            with vsub[3]:
+                st.warning("High-risk recovery candidates. Use as a small watchlist only.")
+                vshow(val_deep, "No Deep Value (high-risk) candidates.")
+            # --- Value Trap Avoid ---
+            with vsub[4]:
+                st.error("Cheap but technically weak. Avoid until structure improves.")
+                vshow(val_trap, "No Value Trap names.")
+            # --- Value Deep Dive ---
+            with vsub[5]:
+                pool = pd.concat([val_reversal, val_base, val_deep], ignore_index=True) \
+                    if not (val_reversal.empty and val_base.empty and val_deep.empty) else pd.DataFrame()
+                if pool.empty:
+                    st.info("No value candidates to deep-dive.")
+                else:
+                    pick = st.selectbox("Select a value stock", pool["Symbol"].tolist(),
+                                        key="val_dive")
+                    r = pool[pool["Symbol"] == pick].iloc[0]
+                    cls = r["Value Classification"]
+                    st.markdown(
+                        f"### {r['Symbol']} - {r['Company']}<br>"
+                        f"{badge(cls, VALUE_COLORS.get(cls, '#555'))} &nbsp; "
+                        f"{badge(r.get('Risk Level', '-'), RISK_COLORS.get(r.get('Risk Level', ''), '#555'))}",
+                        unsafe_allow_html=True)
+                    st.caption(r.get("Value Remark", ""))
+                    dvc = st.columns(2)
+                    dvc[0].plotly_chart(score_gauge(r["Value Score"]), use_container_width=True)
+                    # Component breakdown
+                    bd = pd.DataFrame({
+                        "Component": ["Correction", "Stabilisation", "Reversal", "RS", "Risk"],
+                        "Score": [r.get("Value Correction Score", 0),
+                                  r.get("Value Stabilisation Score", 0),
+                                  r.get("Value Reversal Score", 0),
+                                  r.get("Value RS Score", 0),
+                                  r.get("Value Risk Score", 0)],
+                        "Max":   [20, 25, 25, 15, 15]})
+                    dvc[1].plotly_chart(px.bar(bd, x="Score", y="Component", orientation="h",
+                                               title="Value-score breakdown",
+                                               color="Score", color_continuous_scale="Tealgrn"),
+                                        use_container_width=True)
+                    st.write(f"Entry style: **{r.get('Value Entry Style', '-')}**  |  "
+                             f"Trigger: {r.get('Value Trigger Price', '-')}  |  "
+                             f"Invalidation: {r.get('Value Invalidation Level', '-')}  |  "
+                             f"Target zone: {r.get('Value Target Zone', '-')}")
+                    make_stock_chart(f"{pick}.NS", period,
+                                     trigger=r.get("Value Trigger Price"),
+                                     invalidation=r.get("Value Invalidation Level"))
+
+    # =====================================================================
+    # MOMENTUM + VALUE MATRIX (Phase 2)
+    # =====================================================================
+    with T["Momentum + Value Matrix"]:
+        if "Value Score" not in allstocks.columns or "Composite Score" not in allstocks.columns or allstocks.empty:
+            st.info("Run a scan to build the matrix.")
+        else:
+            cnt = allstocks["Matrix Class"].value_counts().to_dict() if "Matrix Class" in allstocks else {}
+            mc = st.columns(5)
+            for col, key in zip(mc, ["Best Crossover", "Momentum Leader",
+                                     "Value Recovery", "Mixed", "Avoid"]):
+                metric_card(col, key, cnt.get(key, 0), MATRIX_COLORS.get(key, "#555"))
+
+            scat = allstocks.copy()
+            scat["Volume Ratio"] = pd.to_numeric(scat["Volume Ratio"], errors="coerce").fillna(1.0).clip(lower=0.1)
+            fig = px.scatter(
+                scat, x="Value Score", y="Composite Score", size="Volume Ratio",
+                color="Matrix Class", color_discrete_map=MATRIX_COLORS,
+                hover_name="Symbol",
+                hover_data=["Company", "Sector", "Classification", "Value Classification",
+                            "Value Entry Style", "Risk Level"],
+                title="Momentum (Y) vs Value (X) - bubble = volume ratio", size_max=28)
+            # Quadrant guides at 65 / 70 thresholds.
+            fig.add_hline(y=65, line_dash="dot", line_color="grey")
+            fig.add_vline(x=65, line_dash="dot", line_color="grey")
+            st.plotly_chart(fig, use_container_width=True)
+
+            best = scat[scat["Matrix Class"] == "Best Crossover"].sort_values(
+                "Composite Score", ascending=False)
+            st.subheader("Best Crossover - high momentum AND high value")
+            if best.empty:
+                st.info("No Best Crossover stocks in this scan.")
+            else:
+                cols = [c for c in ["Symbol", "Company", "Sector", "CMP", "Composite Score",
+                                    "Value Score", "Classification", "Value Classification",
+                                    "Value Entry Style", "Value Trigger Price", "Risk Level"]
+                        if c in best.columns]
+                st.dataframe(best[cols], use_container_width=True, height=420)
+
+    # =====================================================================
     # 7) STOCK DEEP DIVE
     # =====================================================================
     with T["Stock Deep Dive"]:
@@ -1150,7 +1377,43 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         st.subheader("5. Do Not Chase")
         st.code(scanner.build_donotchase_prompt(do_not_chase), language="text")
 
-        # ---- 6. My Holdings Review (Phase-1 addition) ----
+        # ---- Phase 2: Value-scanner prompts ----
+        VAL_TASK = ("Check latest news, results, sector strength, technical "
+                    "structure, support/resistance, and whether this is suitable "
+                    "for a 15-30 day swing trade. Do not recommend entry if the "
+                    "confirmation condition is not met. Rank them best to weakest.\n\n")
+
+        def _val_prompt(df, header):
+            if df is None or df.empty:
+                return header + VAL_TASK + "(No stocks in this bucket.)"
+            lines = []
+            for _, r in df.iterrows():
+                lines.append(
+                    f"- {r['Symbol']} ({r['Company']}, {r['Sector']}): CMP {r['CMP']}, "
+                    f"Value {r.get('Value Score', '-')}, Composite {r.get('Composite Score', '-')}, "
+                    f"Entry: {r.get('Value Entry Style', '-')}, "
+                    f"Trigger {r.get('Value Trigger Price', '-')}, "
+                    f"Invalidation {r.get('Value Invalidation Level', '-')}, "
+                    f"RSI {r.get('RSI 14', '-')}, RS {r.get('RS Score', '-')}, "
+                    f"Risk {r.get('Risk Level', '-')}")
+            return header + VAL_TASK + "\n".join(lines)
+
+        st.subheader("6. Value Reversal Ready")
+        st.code(_val_prompt(val_reversal,
+                "Review these VALUE REVERSAL READY NSE stocks. "), language="text")
+        st.subheader("7. Value Base Forming")
+        st.code(_val_prompt(val_base,
+                "Review these VALUE BASE FORMING NSE stocks. Setup is developing "
+                "but breakout NOT yet confirmed. "), language="text")
+        st.subheader("8. Momentum + Value Crossover (Best Crossover)")
+        best_cross = (allstocks[allstocks.get("Matrix Class") == "Best Crossover"]
+                      .sort_values("Composite Score", ascending=False)
+                      if "Matrix Class" in allstocks.columns else pd.DataFrame())
+        st.code(_val_prompt(best_cross,
+                "Review these BEST CROSSOVER NSE stocks - high momentum AND high "
+                "value at the same time. "), language="text")
+
+        # ---- 9. My Holdings Review (Phase-1 addition) ----
         if holdings_df is not None and not holdings_df.empty:
             st.subheader("6. My Holdings Review")
             lines = [

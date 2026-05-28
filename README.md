@@ -251,6 +251,43 @@ The classification then sorts these into Strong / Wait / Watchlist / Rejected.
 
 ---
 
+## Technical Value Scanner & Momentum + Value Matrix (Phase 2)
+
+A second engine on the same scan that finds **corrected / stabilising / reclaiming**
+stocks rather than momentum leaders. Pure-technical (no fundamentals).
+
+For every stock we compute:
+- Multi-window range tightness (10/30/60/90 day), ATR contraction, volume dry-up.
+- Drawdowns: 6-month and 1-year max drawdown, fresh-3-month-low flag.
+- Recovery signals: RSI 2-week change, MACD bullish flag (manual 12/26/9),
+  up-day vs down-day volume ratio, lower-highs count.
+- Distance from 20/50/100/200 DMA + the 50 DMA slope.
+
+**Value Score (0-100)** = Correction Opportunity (20) + Stabilisation/Base (25)
++ Reversal Confirmation (25) + Relative Strength Improvement (15) + Risk Control (15).
+
+**Value Classification**:
+| Class | Meaning |
+|-------|---------|
+| **Value Reversal Ready** | Score >=75, 15-40% below 52W high, above 20 DMA, reclaiming 50 DMA, RSI>50, RS improving, no fresh 3-month low. *Recovery confirmed - chart/news review before entry.* |
+| **Value Base Forming** | Score 60-75, range contracting, volume drying up, higher lows, near 50 / 200 DMA. *Set alert above base resistance.* |
+| **Deep Value High Risk** | >35% off 52W high with some stabilisation but sector OK. *Small watchlist only.* |
+| **Value Trap Avoid** | Below falling 200 DMA, fresh lows, RSI weak, or weak sector. *Avoid until structure improves.* |
+
+Each row also carries an **entry style** (Reclaiming 50 DMA / Base breakout / 200 DMA support / Reversal from oversold / Deep value wait), a **Value Trigger**, **Value Invalidation**, and a **Value Target Zone**.
+
+The **Momentum + Value Matrix** tab is a scatter plot (X = value, Y = momentum, bubble = volume) with four named quadrants tagged on each stock:
+- **Best Crossover** (high momentum AND high value) - the strongest interest list.
+- **Momentum Leader** (high momentum, lower value).
+- **Value Recovery** (high value, lower momentum).
+- **Mixed** / **Avoid** (low on both).
+
+Three new Claude prompts are added (*Value Reversal Ready*, *Value Base Forming*, *Best Crossover*). Holdings that surface as `Value Reversal Ready` or `Value Base Forming` appear in a new **Holdings -> Value Recovery** sub-tab.
+
+Exports added: `Value_Reversal_Ready`, `Value_Base_Forming`, `Deep_Value_High_Risk`, `Value_Trap_Avoid`, `Momentum_Value_Matrix`, `Holdings_Value_Recovery` (sheets) + CSVs.
+
+---
+
 ## My Holdings overlay (Zerodha)
 
 Drop your Zerodha holdings export (`.xlsx` / `.xls` / `.csv`) into the sidebar
