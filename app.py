@@ -955,7 +955,9 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
             st.info("No strong breakout stocks with current settings.")
         else:
             # A. Top 5 cards
-            stock_cards(strong, 5, CLASS_COLORS["Strong Breakout / Actionable"], [
+            # Show ALL strong-breakout names as cards (these are the most
+            # actionable list - we never want to hide any qualified candidates).
+            stock_cards(strong, len(strong), CLASS_COLORS["Strong Breakout / Actionable"], [
                 ("Score", "Score"), ("CMP", "CMP"), ("Breakout", "Breakout Status"),
                 ("RSI", "RSI 14"), ("Vol Ratio", "Volume Ratio"), ("Risk", "Risk Level"),
                 ("Entry", "Entry Zone"), ("Stop", "Stop Loss"),
@@ -992,7 +994,9 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
             wd = wait.copy()
             wd["Distance to Trigger %"] = ((wd["Trigger Price"] / wd["CMP"] - 1) * 100).round(2)
             # B. Cards (top 10, two rows of five)
-            stock_cards(wd, 5, CLASS_COLORS["Wait for Confirmation"], [
+            # Top 20 cards (cards wrap 5-per-row -> 4 rows max) so the user
+            # always sees a meaningful slice; full table is below.
+            stock_cards(wd, min(20, len(wd)), CLASS_COLORS["Wait for Confirmation"], [
                 ("CMP", "CMP"), ("Score", "Score"), ("Trigger", "Trigger Price"),
                 ("Alert", "Suggested Alert Price"), ("To Trigger %", "Distance to Trigger %"),
                 ("RSI", "RSI 14"), ("Vol", "Volume Ratio"), ("Need", "Confirmation Needed")])
@@ -1030,7 +1034,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         if watch.empty:
             st.info("No early-watchlist stocks with current settings.")
         else:
-            stock_cards(watch, 5, CLASS_COLORS["Early Watchlist"], [
+            stock_cards(watch, min(15, len(watch)), CLASS_COLORS["Early Watchlist"], [
                 ("CMP", "CMP"), ("Score", "Score"), ("RSI", "RSI 14"),
                 ("Vol", "Volume Ratio"), ("Retest", "Retest Date"),
                 ("RelStr %", "Relative Strength %"), ("Breakout", "Breakout Status")])
@@ -1145,7 +1149,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         else:
             cdf = coiled.copy()
             cdf["Distance to Trigger %"] = ((cdf["Trigger Price"] / cdf["CMP"] - 1) * 100).round(2)
-            stock_cards(cdf, 5, "#6a1b9a", [
+            stock_cards(cdf, min(20, len(cdf)), "#6a1b9a", [
                 ("CMP", "CMP"), ("Coiled", "Coiled Score"), ("RS", "RS Score"),
                 ("ATR Contr", "ATR Contraction"), ("Vol Dryup", "Volume Dryup 10D"),
                 ("To 52WH %", "Distance from 52W High %"), ("Trigger", "Trigger Price")])
@@ -1175,7 +1179,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         if fresh is None or fresh.empty:
             st.info("No fresh momentum candidates with current settings.")
         else:
-            stock_cards(fresh, 5, "#00897b", [
+            stock_cards(fresh, min(20, len(fresh)), "#00897b", [
                 ("CMP", "CMP"), ("Fresh", "Fresh Momentum Score"), ("RSI", "RSI 14"),
                 ("ADX", "ADX 14"), ("Vol", "Volume Ratio"), ("20D High", "20D High"),
                 ("RS", "RS Score"), ("Risk", "Risk Level")])
@@ -1305,7 +1309,8 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
             with vsub[1]:
                 st.success("Recovery confirmed. Consider only after chart/news review.")
                 if not val_reversal.empty:
-                    stock_cards(val_reversal, 5, VALUE_COLORS["Value Reversal Ready"], VAL_CARD_COLS)
+                    stock_cards(val_reversal, min(20, len(val_reversal)),
+                                VALUE_COLORS["Value Reversal Ready"], VAL_CARD_COLS)
                     st.write("")
                     st.plotly_chart(px.bar(val_reversal.sort_values("Value Score").tail(20),
                                            x="Value Score", y="Symbol", orientation="h",
@@ -1317,7 +1322,8 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
             with vsub[2]:
                 st.info("Base forming. Set alert above the base resistance / trigger price.")
                 if not val_base.empty:
-                    stock_cards(val_base, 5, VALUE_COLORS["Value Base Forming"], VAL_CARD_COLS)
+                    stock_cards(val_base, min(20, len(val_base)),
+                                VALUE_COLORS["Value Base Forming"], VAL_CARD_COLS)
                     st.write("")
                     nb = val_base.copy()
                     nb["Distance to Trigger %"] = ((nb["Value Trigger Price"] / nb["CMP"] - 1) * 100).round(2)
