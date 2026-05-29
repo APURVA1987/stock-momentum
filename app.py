@@ -331,6 +331,22 @@ local_mode = st.sidebar.checkbox(
          "cache (fast repeat runs) and overlays the latest official NSE bhavcopy "
          "day on top of Yahoo history. Leave OFF on Streamlit Cloud (NSE blocks "
          "cloud servers).")
+eod_only = st.sidebar.checkbox(
+    "End-of-day data only (drop intraday partial bar)", value=True,
+    help="During NSE market hours (9:15-15:30 IST) Yahoo returns a PARTIAL bar "
+         "for today: Close = current LTP and Volume = only what has traded so "
+         "far. That makes Volume Ratio collapse (~0.2x at 11 AM) and demotes "
+         "real breakouts to Wait/Rejected. With this ON, the partial bar is "
+         "stripped so a 10 AM scan gives the SAME results as a post-close "
+         "scan. Recommended ON.")
+# Show a live notice when the market is currently open.
+if scanner._is_nse_market_hours_ist():
+    if eod_only:
+        st.sidebar.info("Market is OPEN now. Today's partial candle will be "
+                        "stripped automatically; scan uses up to last close.")
+    else:
+        st.sidebar.warning("Market is OPEN. Volume/breakout signals will be "
+                           "understated because today's bar is partial.")
 scan_focus = st.sidebar.selectbox(
     "Scan focus", ["All (Momentum + Value)", "Momentum only", "Value only"],
     index=0, help="Filters which tabs are shown to reduce on-screen clutter. "
@@ -376,7 +392,7 @@ if run_clicked:
         universe, period=period, retest_window=int(retest_window),
         retest_tol=float(retest_tol), min_rsi=float(min_rsi),
         min_vol_ratio=float(min_vol_ratio), min_score=int(min_score),
-        local_mode=bool(local_mode),
+        local_mode=bool(local_mode), eod_only=bool(eod_only),
         progress_callback=on_progress,
     )
     progress.empty()

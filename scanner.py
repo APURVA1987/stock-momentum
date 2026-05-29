@@ -201,7 +201,57 @@ def _overlay_bhavcopy(data: dict, bc) -> int:
     return n
 
 
-def download_universe(symbols, period="5y", local_mode=False, progress=None) -> dict:
+# -----------------------------------------------------------------------------
+# Intraday-bar handling
+# -----------------------------------------------------------------------------
+# During NSE market hours (Mon-Fri 09:15-15:30 IST) Yahoo returns a PARTIAL bar
+# for today: Close = current LTP and Volume = only what has traded so far. That
+# breaks the scanner because (a) Volume Ratio collapses (~0.2x at 11 AM) so the
+# breakout-volume gate fails for almost every stock, and (b) MA comparisons
+# flip noisily on a single tick. Dropping the partial bar gives consistent
+# results whether you scan at 10 AM or after the close.
+def _is_nse_market_hours_ist() -> bool:
+    try:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime, time as dtime
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+        if now.weekday() >= 5:          # Sat / Sun
+            return False
+        return dtime(9, 15) <= now.time() <= dtime(15, 30)
+    except Exception:
+        return False
+
+
+def _strip_intraday_bar(df):
+    """Drop the last row if it's today (IST) AND the market is currently open
+    AND the volume looks suspiciously partial. Safe: returns df unchanged when
+    in doubt."""
+    if df is None or df.empty or not _is_nse_market_hours_ist():
+        return df
+    try:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+        today_ist = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+        last_date = pd.Timestamp(df.index[-1]).date()
+        if last_date == today_ist and len(df) >= 21:
+            # Cross-check: partial bar's volume should be markedly below the
+            # 20-day average. (Catches the case where Yahoo already gave EOD.)
+            last_vol = float(df["Volume"].iloc[-1])
+            avg20 = float(df["Volume"].iloc[-21:-1].mean())
+            if avg20 > 0 and last_vol < avg20 * 0.85:
+                return df.iloc[:-1]
+    except Exception:
+        pass
+    return df
+
+
+def _strip_intraday_all(data: dict) -> dict:
+    """Apply _strip_intraday_bar to every symbol's history."""
+    return {k: _strip_intraday_bar(v) for k, v in data.items()}
+
+
+def download_universe(symbols, period="5y", local_mode=False, progress=None,
+                      eod_only=True) -> dict:
     """Get OHLCV for the whole universe.
 
     Default (cloud): batched Yahoo download for all symbols.
@@ -209,9 +259,13 @@ def download_universe(symbols, period="5y", local_mode=False, progress=None) -> 
     only the stale/missing ones from Yahoo, then overlay the latest NSE bhavcopy
     day, and save the cache. This makes repeated local daily runs fast and far
     less dependent on Yahoo.
+
+    `eod_only=True` (default) drops the partial intraday bar during NSE market
+    hours so the scan is consistent whether run at 10 AM or after close.
     """
     if not local_mode:
-        return download_batch(symbols, period=period, progress=progress)
+        data = download_batch(symbols, period=period, progress=progress)
+        return _strip_intraday_all(data) if eod_only else data
 
     cache = load_price_cache(period)
     fresh_cutoff = pd.Timestamp.today().normalize() - pd.Timedelta(days=6)
@@ -235,7 +289,7 @@ def download_universe(symbols, period="5y", local_mode=False, progress=None) -> 
         pass
 
     save_price_cache(period, data)
-    return data
+    return _strip_intraday_all(data) if eod_only else data
 
 
 def get_nifty_context(period: str = "5y") -> dict:
@@ -1004,7 +1058,7 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
              retest_window: int = 60, retest_tol: float = 7.0,
              min_rsi: float = 55.0, min_vol_ratio: float = 1.5,
              min_score: int = 55, local_mode: bool = False,
-             progress_callback=None) -> dict:
+             eod_only: bool = True, progress_callback=None) -> dict:
     """Scan the whole universe and return categorised result tables."""
     ctx = get_nifty_context(period=period)
     nifty_20d = ctx["nifty_20d_return"]
@@ -1026,7 +1080,7 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
             progress_callback(done, tot, "downloading market data (batched)")
 
     data = download_universe(all_symbols, period=period, local_mode=local_mode,
-                             progress=_dl_progress)
+                             progress=_dl_progress, eod_only=eod_only)
 
     for i, row in enumerate(universe_df.itertuples(index=False), start=1):
         symbol = str(row.symbol).strip().upper()
