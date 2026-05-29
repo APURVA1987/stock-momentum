@@ -119,18 +119,42 @@ def cached_fundamentals(symbol: str):
 
 
 # Streamlit column config that turns a "Screener" URL column into a clickable link.
-SCREENER_COLCFG = {"Screener": st.column_config.LinkColumn("Screener", display_text="open")}
+# Wider min-widths for the identifier / status columns so they never collapse
+# to 2-letter slivers like "AL". The rest size to their content naturally
+# (with use_container_width=False the user can scroll horizontally like Excel).
+SCREENER_COLCFG = {
+    "Screener":              st.column_config.LinkColumn("Screener", display_text="open"),
+    "Symbol":                st.column_config.TextColumn("Symbol", width="medium"),
+    "symbol":                st.column_config.TextColumn("symbol", width="medium"),
+    "Company":               st.column_config.TextColumn("Company", width="large"),
+    "company":               st.column_config.TextColumn("company", width="large"),
+    "Sector":                st.column_config.TextColumn("Sector", width="medium"),
+    "Classification":        st.column_config.TextColumn("Classification", width="medium"),
+    "Value Classification":  st.column_config.TextColumn("Value Classification", width="medium"),
+    "Final Remark":          st.column_config.TextColumn("Final Remark", width="large"),
+    "holding_action":        st.column_config.TextColumn("Action", width="medium"),
+    "holding_remark":        st.column_config.TextColumn("Remark", width="large"),
+    "Confirmation Needed":   st.column_config.TextColumn("Confirmation Needed", width="large"),
+    "Stop Loss":             st.column_config.TextColumn("Stop Loss", width="large"),
+    "Target 1":              st.column_config.TextColumn("Target 1", width="medium"),
+    "Target 2":              st.column_config.TextColumn("Target 2", width="medium"),
+}
 
 
 def df_with_links(df: pd.DataFrame, cols, height=420):
-    """Show a table with a clickable Screener link as the first column."""
+    """Show a table with a clickable Screener link as the first column.
+
+    Uses natural column widths (use_container_width=False) so the Symbol /
+    Company columns never get squished. The user can scroll horizontally
+    inside the table to see all columns - the Excel experience they expect.
+    """
     if df is None or df.empty:
         st.info("No rows.")
         return
     d = df.copy()
     d["Screener"] = d["Symbol"].map(fundamentals.screener_url)
     show = ["Screener"] + [c for c in cols if c in d.columns]
-    st.dataframe(d[show], use_container_width=True, height=height, column_config=SCREENER_COLCFG)
+    st.dataframe(d[show], use_container_width=False, height=height, column_config=SCREENER_COLCFG)
 
 
 def parse_nse_constituent(file, cap_label: str) -> pd.DataFrame:
@@ -724,8 +748,12 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                     st.info(empty_msg)
                     return
                 cols = [c for c in holding_cols if c in df.columns]
+                # use_container_width=False = natural per-column widths so the
+                # Symbol/Company columns are never truncated. The user scrolls
+                # horizontally inside the table for the remaining columns.
                 st.dataframe(style_holdings(df[cols]),
-                             use_container_width=True, height=480)
+                             use_container_width=False, height=480,
+                             column_config=SCREENER_COLCFG)
 
             # ---- A. Portfolio Summary ----
             with sub[0]:
@@ -996,7 +1024,8 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                                    color="Score", color_continuous_scale="Blues"),
                             use_container_width=True)
             st.subheader(f"All Early-Watchlist stocks ({len(watch)})")
-            st.dataframe(watch, use_container_width=True, height=520)
+            st.dataframe(watch, use_container_width=False, height=520,
+                         column_config=SCREENER_COLCFG)
 
     # =====================================================================
     # SECTOR ROTATION (percentile-ranked sector strength engine)
@@ -1030,7 +1059,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
             st.plotly_chart(heat, use_container_width=True)
             # D. Full sector table
             with st.expander("Full sector table"):
-                st.dataframe(sector_rot, use_container_width=True, height=360)
+                st.dataframe(sector_rot, use_container_width=False, height=360)
             # E. Sector drill-down
             if not allstocks.empty:
                 sec_pick = st.selectbox("Show stocks in sector", list(sector_rot["Sector"]))
@@ -1229,7 +1258,8 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                 if df is None or df.empty:
                     st.info(msg); return
                 cols = [c for c in VAL_TBL_COLS if c in df.columns]
-                st.dataframe(df[cols], use_container_width=True, height=440)
+                st.dataframe(df[cols], use_container_width=False, height=440,
+                             column_config=SCREENER_COLCFG)
 
             # --- Summary ---
             with vsub[0]:
@@ -1369,7 +1399,8 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                                     "Value Score", "Classification", "Value Classification",
                                     "Value Entry Style", "Value Trigger Price", "Risk Level"]
                         if c in best.columns]
-                st.dataframe(best[cols], use_container_width=True, height=420)
+                st.dataframe(best[cols], use_container_width=False, height=420,
+                             column_config=SCREENER_COLCFG)
 
     # =====================================================================
     # 7) STOCK DEEP DIVE
@@ -1477,7 +1508,8 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                                    title="Why stocks were rejected",
                                    color_discrete_sequence=["#8b1e1e"]), use_container_width=True)
             with st.expander("Rejected table"):
-                st.dataframe(rejected, use_container_width=True, height=400)
+                st.dataframe(rejected, use_container_width=False, height=400,
+                             column_config=SCREENER_COLCFG)
         else:
             st.info("No rejected stocks.")
         st.subheader("Failed tickers (download error / no data)")
