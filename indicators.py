@@ -146,3 +146,36 @@ def close_position(open_=None, high=None, low=None, close=None) -> float:
     if rng is None or rng == 0:
         return 0.5
     return float((close - low) / rng)
+
+
+# -----------------------------------------------------------------------------
+# v2: Volume / accumulation primitives (On-Balance Volume, Accumulation/Dist).
+# These are calculated manually (no extra library) and feed the Spring and
+# Volume-Accumulation engines in scanner.py.
+# -----------------------------------------------------------------------------
+def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
+    """On-Balance Volume: running sum of signed volume.
+    Up-day adds today's volume, down-day subtracts it. A rising OBV while price
+    is flat = quiet accumulation (smart money buying the base)."""
+    direction = np.sign(close.diff().fillna(0.0))
+    return (direction * volume).cumsum()
+
+
+def ad_line(high: pd.Series, low: pd.Series, close: pd.Series,
+            volume: pd.Series) -> pd.Series:
+    """Accumulation/Distribution line: cumulative money-flow-volume.
+    Multiplier = ((close-low) - (high-close)) / (high-low), in [-1, +1]."""
+    rng = (high - low).replace(0, np.nan)
+    mfm = ((close - low) - (high - close)) / rng
+    mfm = mfm.fillna(0.0)
+    return (mfm * volume).cumsum()
+
+
+def linslope(series: pd.Series, lookback: int) -> float:
+    """Raw linear-fit slope (price units per day) of the last `lookback` points.
+    Used for OBV / A-D slope where we care about sign and relative magnitude."""
+    data = series.dropna().tail(lookback)
+    if len(data) < 2:
+        return np.nan
+    x = np.arange(len(data))
+    return float(np.polyfit(x, data.values, 1)[0])

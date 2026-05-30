@@ -517,6 +517,7 @@ def export_outputs(result, holdings_df=None):
     sector_rot = result.get("sector_rotation", pd.DataFrame())
     allst = result.get("all_stocks", pd.DataFrame())
     coiled, fresh = result.get("coiled", pd.DataFrame()), result.get("fresh", pd.DataFrame())
+    spring_x = result.get("spring", pd.DataFrame())
 
     def _sel(df, col, val, sort="Composite Score"):
         if df is None or df.empty or col not in df:
@@ -555,6 +556,7 @@ def export_outputs(result, holdings_df=None):
     sheets = {
         "Elite_Momentum": elite, "Actionable_Breakout": actionable,
         "Strong_Breakout": strong, "Wait_For_Confirmation": wait,
+        "Spring_PreBreakout": spring_x,
         "Coiled_Ready": coiled, "Fresh_Momentum": fresh, "Early_Watchlist": watch,
         "RS_Leaders": rs_leaders, "Sector_Rotation": sector_rot,
         "Do_Not_Chase": do_not_chase, "Rejected": rejected,
@@ -582,6 +584,7 @@ def export_outputs(result, holdings_df=None):
                     ["Value Reversal Ready", "Value Base Forming"])]
     xlsx_path = _write_workbook(os.path.join(OUTPUTS_DIR, "scanner_output.xlsx"), sheets)
     csvs = [(strong, "strong_breakout.csv"), (wait, "wait_for_confirmation.csv"),
+            (spring_x, "spring_prebreakout.csv"),
             (coiled, "coiled_ready.csv"), (fresh, "fresh_momentum.csv"),
             (watch, "early_watchlist.csv"), (rs_leaders, "rs_leaders.csv"),
             (sector_rot, "sector_rotation.csv"), (do_not_chase, "do_not_chase.csv"),
@@ -740,19 +743,21 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     sector_rot = result.get("sector_rotation", pd.DataFrame())
     coiled = result.get("coiled", pd.DataFrame())
     fresh = result.get("fresh", pd.DataFrame())
+    spring = result.get("spring", pd.DataFrame())
 
     # Name-keyed tabs (order can change without breaking the blocks below).
     # ---- Tab visibility driven by sidebar "Scan focus" ----
     _ALL_TABS = ["My Holdings", "Market Overview", "Sector Rotation", "RS Leaders",
-                 "Strong Breakout", "Wait for Confirmation", "Coiled / Ready",
-                 "Fresh Momentum", "Early Watchlist", "Do Not Chase", "Momentum Map",
-                 "Technical Value Scanner", "Momentum + Value Matrix",
+                 "Strong Breakout", "Spring / Pre-Breakout", "Wait for Confirmation",
+                 "Coiled / Ready", "Fresh Momentum", "Early Watchlist", "Do Not Chase",
+                 "Momentum Map", "Technical Value Scanner", "Momentum + Value Matrix",
                  "Stock Deep Dive", "Rejected / Failed", "Claude Review", "Export"]
     if scan_focus == "Momentum only":
         _hidden = {"Technical Value Scanner"}
     elif scan_focus == "Value only":
-        _hidden = {"Strong Breakout", "Wait for Confirmation", "Coiled / Ready",
-                   "Fresh Momentum", "Do Not Chase", "Momentum Map", "RS Leaders"}
+        _hidden = {"Strong Breakout", "Spring / Pre-Breakout", "Wait for Confirmation",
+                   "Coiled / Ready", "Fresh Momentum", "Do Not Chase", "Momentum Map",
+                   "RS Leaders"}
     else:
         _hidden = set()
     if not _holdings_authed():                # holdings tab vanishes if locked
@@ -1385,6 +1390,61 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
             summary_table(cdf, key="coiled_tbl", title="Coiled / Ready stocks",
                           caption="Spring-loaded setups. Wait for a breakout with volume.",
                           detail_cols=ccols, default_sort="Coiled Score")
+
+    # =====================================================================
+    # SPRING / PRE-BREAKOUT (v2 - earliest candidate detector)
+    # =====================================================================
+    with T["Spring / Pre-Breakout"]:
+        st.markdown("## Spring / Pre-Breakout")
+        st.caption("Stocks coiling in a tight base WHILE under accumulation (rising "
+                   "OBV, dry down-volume) - caught BEFORE the breakout. Alert at the "
+                   "pivot; enter only on a volume breakout above trigger.")
+        if spring is None or spring.empty:
+            st.info("No Spring-Ready setups with current settings. This is the strictest "
+                    "engine (tight VCP base + accumulation + uptrend); empty is common "
+                    "in a weak or choppy market.")
+        else:
+            sp = spring.copy()
+            sp["To Trigger %"] = ((sp["Spring Trigger"] / sp["CMP"] - 1) * 100).round(2)
+            kc = st.columns(4)
+            metric_card(kc[0], "Spring Ready", len(sp), "#6a1b9a")
+            metric_card(kc[1], "Avg Spring Score", f"{sp['Spring Score'].mean():.0f}", "#37474f")
+            metric_card(kc[2], "Avg Accumulation",
+                        f"{sp['Accumulation Score'].mean():.0f}", "#1e7d32")
+            nearest = sp.sort_values("To Trigger %").iloc[0]
+            metric_card(kc[3], "Closest to pivot", nearest["Symbol"], "#1f4e79",
+                        sub=f"{nearest['To Trigger %']}% away")
+            st.write("")
+            stock_cards(sp, min(20, len(sp)), "#6a1b9a", [
+                ("CMP", "CMP"), ("Spring", "Spring Score"), ("Accum", "Accumulation Score"),
+                ("A/D", "A/D State"), ("VCP", "VCP Contractions"),
+                ("Pocket Pivot", "Pocket Pivot"), ("Trigger", "Spring Trigger"),
+                ("To Trigger %", "To Trigger %")])
+            st.write("")
+            gsp = st.columns(2)
+            gsp[0].plotly_chart(px.bar(sp.sort_values("Spring Score").tail(20),
+                                       x="Spring Score", y="Symbol", orientation="h",
+                                       title="Tightest accumulating springs",
+                                       color="Accumulation Score",
+                                       color_continuous_scale="Purples"),
+                                use_container_width=True)
+            gsp[1].plotly_chart(px.scatter(
+                sp, x="Accumulation Score", y="Spring Score", size="VCP Contractions",
+                color="A/D State",
+                color_discrete_map={"Accumulation": "#1e7d32", "Neutral": "#e08e0b",
+                                    "Distribution": "#8b1e1e"},
+                hover_name="Symbol", title="Spring vs Accumulation (bubble = VCP)",
+                size_max=24), use_container_width=True)
+            st.divider()
+            scols = ["Symbol", "Company", "Sector", "CMP", "Spring Score",
+                     "Accumulation Score", "A/D State", "VCP Contractions", "Pocket Pivot",
+                     "Base Depth %", "Base Length D", "OBV Slope 20D %",
+                     "Distance from 52W High %", "Spring Trigger", "To Trigger %",
+                     "Composite Score", "Risk Level"]
+            summary_table(sp, key="spring_tbl", title="Spring / Pre-Breakout stocks",
+                          caption="Earliest stage. Set an alert at the Spring Trigger; "
+                                  "only buy a volume breakout above it.",
+                          detail_cols=scols, default_sort="Spring Score")
 
     # =====================================================================
     # FRESH MOMENTUM (new ignition, may have skipped the 200 DMA retest)

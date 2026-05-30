@@ -50,6 +50,18 @@ SCORE_STRONG = 80            # score band: Strong
 SCORE_WAIT = 65              # score band: Wait for Confirmation
 SCORE_WATCH_FLOOR = 55       # score band: Early Watchlist floor (also reject cut)
 
+# --- v2 (Phase 1): Spring / Pre-Breakout + Accumulation + liquidity floor ---
+MAX_EXT_FROM_10DMA = 6.0       # pocket-pivot freshness (close not far above 10 DMA)
+SPRING_READY_MIN = 70          # Spring Score needed for "Spring Ready"
+SPRING_BASE_MAX_DEPTH = 25.0   # base must be tighter than 25% to be a coil
+SPRING_BASE_MIN_LEN = 15       # base at least ~3 weeks old
+VCP_MIN_CONTRACTIONS = 2       # min successive shrinking pullbacks
+OBV_ACCUM_SLOPE_MIN = 0.0      # OBV rising while price flat = accumulation
+# Liquidity floor: 20-day avg turnover (Rupees/day) by market-cap band.
+MIN_TURNOVER_LARGE = 50_00_00_000   # Rs 50 Cr/day
+MIN_TURNOVER_MID = 5_00_00_000      # Rs 5 Cr/day
+MIN_TURNOVER_SMALL = 1_00_00_000    # Rs 1 Cr/day
+
 
 # -----------------------------------------------------------------------------
 # 1. DATA DOWNLOAD
@@ -333,6 +345,42 @@ def get_nifty_context(period: str = "5y") -> dict:
 
 
 # -----------------------------------------------------------------------------
+# v2 (Section 11A): VCP contraction count
+# -----------------------------------------------------------------------------
+def _vcp_contractions(df: pd.DataFrame) -> int:
+    """Count successive SHRINKING pullbacks (Volatility Contraction Pattern).
+
+    Walk swing pivots over the window; each time a pullback's depth is smaller
+    than the previous pullback's depth, that's one contraction. Returns the
+    length of the final run of shrinking contractions ending at the last bar.
+    """
+    if df is None or len(df) < 20:
+        return 0
+    close = df["Close"].values
+    # Find local peaks (a bar higher than its immediate neighbours).
+    peaks = [i for i in range(1, len(close) - 1)
+             if close[i] >= close[i - 1] and close[i] > close[i + 1]]
+    if len(peaks) < 2:
+        return 0
+    # Depth of the pullback after each peak (peak -> following trough).
+    depths = []
+    for k in range(len(peaks)):
+        start = peaks[k]
+        end = peaks[k + 1] if k + 1 < len(peaks) else len(close) - 1
+        trough = close[start:end + 1].min()
+        if close[start] > 0:
+            depths.append((close[start] - trough) / close[start] * 100)
+    # Count the trailing run of strictly shrinking depths.
+    run = 0
+    for k in range(len(depths) - 1, 0, -1):
+        if depths[k] < depths[k - 1]:
+            run += 1
+        else:
+            break
+    return int(run)
+
+
+# -----------------------------------------------------------------------------
 # 2. INDICATOR PACK (everything we need for ONE stock)
 # -----------------------------------------------------------------------------
 def compute_metrics(df: pd.DataFrame, nifty_returns: dict,
@@ -525,6 +573,61 @@ def compute_metrics(df: pd.DataFrame, nifty_returns: dict,
     # Distance from 100 DMA.
     dist_from_100 = ((cmp / ma100 - 1) * 100) if (ma100 and ma100 > 0) else np.nan
 
+    # ====================================================================
+    # v2 PHASE 1: volume-accumulation, spring / pre-breakout, liquidity
+    # ====================================================================
+    ma10 = float(ind.sma(close, 10).iloc[-1])
+    dist_from_10 = ((cmp / ma10 - 1) * 100) if ma10 > 0 else np.nan
+
+    # On-Balance Volume + Accumulation/Distribution slopes
+    obv_series = ind.obv(close, volume)
+    ad_series = ind.ad_line(high, low, close, volume)
+    obv_slope_raw = ind.linslope(obv_series, 20)
+    obv_mean = float(obv_series.tail(20).abs().mean()) or 1.0
+    obv_slope_pct = (obv_slope_raw / obv_mean * 100) if not np.isnan(obv_slope_raw) else np.nan
+    ad_slope = ind.linslope(ad_series, 20)
+
+    # Volume pocket: count of last 10 days where a DOWN day had very dry volume
+    last10 = df.tail(10)
+    d10 = last10["Close"].diff()
+    vol_pocket_10 = int(((d10 < 0) & (last10["Volume"] < 0.6 * avg_vol_20)).sum())
+
+    # Pocket pivot: today is an up-day whose volume tops the max down-day volume
+    # of the prior 10 sessions, while holding above the 10 DMA.
+    prior10 = df.iloc[-11:-1] if len(df) > 11 else df.tail(10)
+    pd10 = prior10["Close"].diff()
+    max_down_vol = float(prior10["Volume"][pd10 < 0].max()) if (pd10 < 0).any() else 0.0
+    pocket_pivot = bool(close.iloc[-1] > close.iloc[-2] and latest_vol > max_down_vol
+                        and cmp > ma10)
+
+    # NR7 / inside bar (tight-bar signals)
+    last7 = df.tail(7)
+    bar_range = last7["High"] - last7["Low"]
+    nr7 = bool(len(last7) == 7 and bar_range.iloc[-1] == bar_range.min())
+    inside_bar = bool(len(df) >= 2 and high.iloc[-1] < high.iloc[-2]
+                      and low.iloc[-1] > low.iloc[-2])
+
+    # Base geometry over the last 40 sessions
+    base40 = df.tail(40)
+    base_high = float(base40["High"].max())
+    base_low = float(base40["Low"].min())
+    base_depth = ((base_high - base_low) / base_high * 100) if base_high > 0 else np.nan
+    near_hi = base40["High"] >= base_high * 0.97
+    base_length = int(len(base40) - (near_hi.values.argmax())) if near_hi.any() else 0
+
+    # 52-week-high age (days since the high printed)
+    yr = df.tail(252)
+    hi_idx = int(yr["High"].values.argmax())
+    high_52w_age = int(len(yr) - 1 - hi_idx)
+
+    # 20-day average turnover (Rs/day)
+    avg_turnover_20 = float((close.tail(20) * volume.tail(20)).mean())
+
+    # VCP contraction count over last ~90 sessions
+    vcp_contractions = _vcp_contractions(df.tail(90))
+
+    tightness_ratio = (range_10d / range_60d) if (range_60d and range_60d > 0) else np.nan
+
     return {
         # display values (rounded)
         "CMP": round(cmp, 2), "20 DMA": round(ma20, 2), "50 DMA": round(ma50, 2),
@@ -573,10 +676,32 @@ def compute_metrics(df: pd.DataFrame, nifty_returns: dict,
         "RSI Change 2W": round(rsi_change_2w, 2),
         "Up/Down Vol Ratio": round(up_down_vol, 2) if not np.isnan(up_down_vol) else np.nan,
         "Distance from 100 DMA %": round(dist_from_100, 2) if not np.isnan(dist_from_100) else np.nan,
+        # --- v2 Phase 1 display columns ---
+        "10 DMA": round(ma10, 2),
+        "Distance from 10 DMA %": round(dist_from_10, 2) if not np.isnan(dist_from_10) else np.nan,
+        "OBV Slope 20D %": round(obv_slope_pct, 2) if not np.isnan(obv_slope_pct) else np.nan,
+        "AD Slope 20D": round(ad_slope, 1) if not np.isnan(ad_slope) else np.nan,
+        "Up/Down Vol Ratio 30D": round(up_down_vol, 2) if not np.isnan(up_down_vol) else np.nan,
+        "Volume Pocket 10D": vol_pocket_10,
+        "Pocket Pivot": "Yes" if pocket_pivot else "No",
+        "NR7": "Yes" if nr7 else "No",
+        "Inside Bar": "Yes" if inside_bar else "No",
+        "VCP Contractions": vcp_contractions,
+        "Tightness Ratio": round(tightness_ratio, 2) if not np.isnan(tightness_ratio) else np.nan,
+        "Base Depth %": round(base_depth, 2) if not np.isnan(base_depth) else np.nan,
+        "Base Length D": base_length,
+        "52W High Age D": high_52w_age,
+        "Avg Turnover 20D": round(avg_turnover_20, 0),
         "_macd_bullish": macd_bullish,
         "_fresh_3m_low": fresh_3m_low,
         "_lower_highs": lower_highs,
         "_slope50": slope50,
+        "_ma10": ma10, "_obv_slope_pct": obv_slope_pct, "_ad_slope": ad_slope,
+        "_pocket_pivot": pocket_pivot, "_nr7": nr7, "_inside_bar": inside_bar,
+        "_vcp": vcp_contractions, "_tightness": tightness_ratio,
+        "_base_depth": base_depth, "_base_length": base_length,
+        "_high_52w_age": high_52w_age, "_avg_turnover20": avg_turnover_20,
+        "_base_high": base_high, "_vol_pocket10": vol_pocket_10,
         "ATR 50": round(atr50, 2) if not np.isnan(atr50) else np.nan,
         "ATR Contraction": round(atr_contraction, 2) if not np.isnan(atr_contraction) else np.nan,
         "Volume Dryup 10D": round(vol_dryup_10, 2) if not np.isnan(vol_dryup_10) else np.nan,
@@ -686,6 +811,109 @@ def _f(v, default=0.0):
         return default if (v is None or (isinstance(v, float) and np.isnan(v))) else float(v)
     except (TypeError, ValueError):
         return default
+
+
+# -----------------------------------------------------------------------------
+# v2 Section 4A: liquidity floor
+# -----------------------------------------------------------------------------
+def is_illiquid(m: dict, cap: str) -> bool:
+    """True if 20-day avg turnover is below the market-cap band's floor."""
+    t = _f(m.get("_avg_turnover20"))
+    c = str(cap or "").strip().lower()
+    if "large" in c:
+        return t < MIN_TURNOVER_LARGE
+    if "mid" in c:
+        return t < MIN_TURNOVER_MID
+    return t < MIN_TURNOVER_SMALL   # small cap / holding / unknown
+
+
+# -----------------------------------------------------------------------------
+# v2 Section 10C: Volume Accumulation layer
+# -----------------------------------------------------------------------------
+def accumulation_score(m: dict) -> tuple:
+    """Return (score 0-100, A/D State label)."""
+    obv_sl = _f(m.get("_obv_slope_pct"))
+    ad_sl = _f(m.get("_ad_slope"))
+    udv = _f(m.get("Up/Down Vol Ratio 30D"), 1.0)
+    pocket = _f(m.get("_vol_pocket10"))
+    sc = 0
+    # OBV slope (35)
+    if obv_sl > 1.0: sc += 35
+    elif obv_sl > 0.2: sc += 25
+    elif obv_sl > 0: sc += 15
+    # A/D slope (25)
+    if ad_sl > 0: sc += 25
+    elif ad_sl == 0: sc += 10
+    # Up/down volume (25)
+    if udv >= 1.3: sc += 25
+    elif udv >= 1.1: sc += 15
+    elif udv >= 1.0: sc += 8
+    # Dry down-volume pockets (15)
+    if pocket >= 4: sc += 15
+    elif pocket >= 2: sc += 8
+    sc = int(min(100, sc))
+    state = "Accumulation" if sc >= 70 else ("Neutral" if sc >= 45 else "Distribution")
+    return sc, state
+
+
+# -----------------------------------------------------------------------------
+# v2 Section 10A/10B: Pre-Breakout / Coiled Spring
+# -----------------------------------------------------------------------------
+def spring_score(m: dict, accum_score: float) -> tuple:
+    """Return (score 0-100, spring_ready bool, trigger, alert)."""
+    tight = _f(m.get("_tightness"), 9)
+    atrc = _f(m.get("_atr_contraction"), 9)
+    vcp = _f(m.get("_vcp"))
+    obv_sl = _f(m.get("_obv_slope_pct"))
+    udv = _f(m.get("Up/Down Vol Ratio 30D"), 0)
+    vdry = _f(m.get("_vol_dryup10"), 9)
+    d52 = _f(m.get("Distance from 52W High %"), -99)
+    cmp_ = _f(m["CMP"]); ma50 = _f(m["50 DMA"]); ma200 = _f(m["200 DMA"])
+    slope200 = _f(m.get("200 DMA Slope %"))
+    base_len = _f(m.get("_base_length"))
+
+    sc = 0
+    # tightness (20)
+    if tight <= 0.40: sc += 20
+    elif tight <= 0.60: sc += 14
+    elif tight <= 0.80: sc += 7
+    # ATR contraction (15)
+    if atrc < 0.70: sc += 15
+    elif atrc < 0.85: sc += 10
+    elif atrc < 1.0: sc += 4
+    # VCP structure (15)
+    if vcp >= 3: sc += 15
+    elif vcp == 2: sc += 10
+    elif vcp == 1: sc += 4
+    # accumulation (15)
+    if obv_sl > 0 and udv >= 1.1: sc += 15
+    elif obv_sl > 0: sc += 8
+    # volume dry-up (10)
+    if vdry < 0.60: sc += 10
+    elif vdry < 0.80: sc += 6
+    # proximity to pivot (10)
+    if d52 >= -5: sc += 10
+    elif d52 >= -10: sc += 6
+    elif d52 >= -15: sc += 3
+    # trend backdrop (10)
+    if cmp_ > ma50 > ma200 and slope200 > 0: sc += 10
+    elif cmp_ > ma200: sc += 5
+    # base maturity (5)
+    if SPRING_BASE_MIN_LEN <= base_len <= 90: sc += 5
+    # pocket-pivot bonus (10B)
+    if str(m.get("Pocket Pivot")) == "Yes": sc += 5
+    sc = int(min(100, sc))
+
+    ready = bool(
+        sc >= SPRING_READY_MIN and cmp_ > ma50 and cmp_ > ma200 and slope200 > 0
+        and _f(m.get("_base_depth"), 99) <= SPRING_BASE_MAX_DEPTH
+        and base_len >= SPRING_BASE_MIN_LEN and vcp >= VCP_MIN_CONTRACTIONS
+        and obv_sl >= OBV_ACCUM_SLOPE_MIN and atrc < 0.85 and d52 >= -15
+        and accum_score >= 45)        # not a Distribution state
+
+    trigger = round(max(_f(m.get("_base_high")), _f(m.get("_prev_52w_high"))), 2)
+    alert = round(trigger * 0.99, 2)
+    return sc, ready, trigger, alert
 
 
 # --- Breakout Quality (0-100): how clean/healthy is the breakout? ---
@@ -1048,6 +1276,34 @@ def _build_row(s, m, score, comps, classification, sector_rank_map, min_vol_rati
     row.update(val)
     row["Matrix Class"] = V.matrix_class(row.get("Composite Score"), val["Value Score"])
     row["Matrix Remark"] = V.MATRIX_REMARKS.get(row["Matrix Class"], "")
+
+    # --- v2 Phase 1: accumulation + spring + liquidity + readiness ---
+    acc_sc, acc_state = accumulation_score(m)
+    spr_sc, spr_ready, spr_trig, spr_alert = spring_score(m, acc_sc)
+    illiquid = is_illiquid(m, s.get("cap"))
+    # Liquidity floor: an illiquid name can't be Spring-Ready / actionable.
+    if illiquid:
+        spr_ready = False
+    row["Accumulation Score"] = acc_sc
+    row["A/D State"] = acc_state
+    row["Spring Score"] = spr_sc
+    row["Spring Ready"] = "Yes" if spr_ready else "No"
+    row["Spring Trigger"] = spr_trig
+    row["Spring Alert"] = spr_alert
+    row["Pocket Pivot"] = m.get("Pocket Pivot", "No")
+    row["VCP Contractions"] = m.get("VCP Contractions", 0)
+    row["Base Depth %"] = m.get("Base Depth %")
+    row["Base Length D"] = m.get("Base Length D")
+    row["52W High Age D"] = m.get("52W High Age D")
+    row["OBV Slope 20D %"] = m.get("OBV Slope 20D %")
+    row["Avg Turnover 20D"] = m.get("Avg Turnover 20D")
+    row["Illiquid"] = "Yes" if illiquid else "No"
+    # Momentum Readiness blend (Section 15): confirmed + early both rank.
+    comp = _f(row.get("Composite Score"))
+    row["Momentum Readiness"] = round(0.5 * comp + 0.3 * spr_sc + 0.2 * acc_sc, 1)
+    # Section 13: fresh-high bonus on Breakout Quality (cap 100).
+    if _f(m.get("52W High Age D"), 99) <= 5 and "Breakout Quality" in row:
+        row["Breakout Quality"] = min(100, _f(row["Breakout Quality"]) + 5)
     return row
 
 
@@ -1194,7 +1450,7 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
     # PHASE D: composite momentum score + build rows + route
     # =========================================================================
     strong_rows, wait_rows, watch_rows, all_rows = [], [], [], []
-    coiled_rows, fresh_rows = [], []
+    coiled_rows, fresh_rows, spring_rows = [], [], []
     for s in stocks:
         m, comps, score = s["m"], s["comps"], s["score"]
         classification = s["classification"]
@@ -1237,11 +1493,17 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
         rowd = _build_row(s, m, score, comps, classification, sector_rank_map,
                           min_vol_ratio, regime, sector_status_map=sector_status_map)
         rowd.update(extra)
+        # Recompute Momentum Readiness now that Composite Score is final.
+        rowd["Momentum Readiness"] = round(
+            0.5 * composite + 0.3 * _f(rowd.get("Spring Score"))
+            + 0.2 * _f(rowd.get("Accumulation Score")), 1)
         all_rows.append(rowd)
         if is_coiled:
             coiled_rows.append(rowd)
         if is_fresh:
             fresh_rows.append(rowd)
+        if rowd.get("Spring Ready") == "Yes":
+            spring_rows.append(rowd)
 
         if classification == "Strong Breakout / Actionable":
             strong_rows.append(rowd)
@@ -1271,12 +1533,20 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
     watch_df = finalise(watch_rows, ["Composite Score"], [False])
     coiled_df = finalise(coiled_rows, ["Coiled Score", "Distance from 52W High %"], [False, True])
     fresh_df = finalise(fresh_rows, ["Fresh Momentum Score", "RS Score"], [False, False])
-    all_df = finalise(all_rows, ["Composite Score"], [False])
+    spring_df = finalise(spring_rows, ["Spring Score", "Accumulation Score"], [False, False])
+    all_df = finalise(all_rows, ["Momentum Readiness"], [False])
+    # Accumulation view: top names by Accumulation Score (independent of class).
+    accumulation_df = pd.DataFrame()
+    if all_rows:
+        accumulation_df = (pd.DataFrame(all_rows)
+                           .sort_values("Accumulation Score", ascending=False)
+                           .reset_index(drop=True))
     rejected_df = pd.DataFrame(rejected_rows)
 
     return {
         "strong": strong_df, "wait": wait_df, "watchlist": watch_df,
         "coiled": coiled_df, "fresh": fresh_df,
+        "spring": spring_df, "accumulation": accumulation_df,
         "rejected": rejected_df, "failed": failed,
         "all_stocks": all_df, "sector_rotation": sector_rotation,
         "price_data": data,   # in-memory OHLCV cache for the Deep-Dive chart
