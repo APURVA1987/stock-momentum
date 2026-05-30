@@ -219,3 +219,263 @@ MATRIX_REMARKS = {
     "Mixed":            "Average on both axes. Watch only.",
     "Avoid":            "Weak on both momentum and value. Avoid.",
 }
+
+
+# =============================================================================
+# v2 PHASE 3 - VALUE / QUALITY-GROWTH SCAN (Sections 33-39)
+# =============================================================================
+# Fundamentals-FIRST 3-5 year scan. Consumes the sub-scores produced by
+# fundamentals.score_fundamentals() (Phase 2) plus the raw fundamentals dict.
+# value.py imports NOTHING from scanner.py (rule Section 46).
+# -----------------------------------------------------------------------------
+import math
+
+NONFIN_PE_CAP = 25.0           # fair-PE cap when no sector median is available
+CYCLICAL_PE_CAP = 18.0         # tighter cap for cyclical sectors
+GSEC_YIELD = 7.0               # ~10Y G-Sec yield (%) for the earnings-yield test
+CYCLICAL_SECTORS = {"metals", "mining", "cement", "auto", "auto ancillary",
+                    "sugar", "realty", "infrastructure", "capital goods",
+                    "chemicals", "energy", "power", "shipping"}
+
+
+def _vf(f, k, default=float("nan")):
+    """Safe float getter for the fundamentals dict (NaN-tolerant)."""
+    v = (f or {}).get(k, default)
+    try:
+        return default if (v is None or (isinstance(v, float) and math.isnan(v))) else float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clamp(x, lo, hi):
+    return max(lo, min(hi, x))
+
+
+def fair_pe(f, sector: str, sector_pe_median: float) -> float:
+    """Fair P/E = min(sector median, own 5Y median) when available, else a cap."""
+    cands = []
+    if not math.isnan(_vf({"x": sector_pe_median}, "x", float("nan"))) and sector_pe_median > 0:
+        cands.append(sector_pe_median)
+    own5 = _vf(f, "pe_5y_median")
+    if not math.isnan(own5) and own5 > 0:
+        cands.append(own5)
+    if cands:
+        return float(min(cands))
+    sec = str(sector or "").strip().lower()
+    return CYCLICAL_PE_CAP if sec in CYCLICAL_SECTORS else NONFIN_PE_CAP
+
+
+# -----------------------------------------------------------------------------
+# Section 33: Valuation engine (growth-adjusted)
+# -----------------------------------------------------------------------------
+def score_valuation(f: dict, growth_score: float, sector: str = "",
+                    sector_pe_median: float = float("nan")) -> dict:
+    """Return {Valuation Score, Valuation Flag}."""
+    if not f:
+        return {"Valuation Score": float("nan"), "Valuation Flag": "No Data"}
+    pe = _vf(f, "pe_ttm")
+    pb = _vf(f, "pb")
+    peg = _vf(f, "peg")
+    sc = 0
+    flag = "-"
+    # PEG (30)
+    if not math.isnan(peg):
+        sc += 30 if peg <= 1.0 else 22 if peg <= 1.5 else 12 if peg <= 2.0 else 4 if peg <= 3 else 0
+    # P/E vs sector median (25)
+    if not math.isnan(pe) and not math.isnan(sector_pe_median) and sector_pe_median > 0:
+        ratio = pe / sector_pe_median
+        sc += 25 if ratio <= 0.8 else 18 if ratio <= 1.0 else 9 if ratio <= 1.3 else 3
+    elif not math.isnan(pe):
+        sc += 18 if pe <= 18 else 9 if pe <= 30 else 3
+    # Earnings yield vs G-Sec (20)
+    if not math.isnan(pe) and pe > 0:
+        ey = 100.0 / pe
+        spread = ey - GSEC_YIELD
+        sc += 20 if spread > 0 else 10 if spread > -2 else 0
+    # P/B (15) - skip for asset-light
+    if not math.isnan(pb):
+        sc += 15 if pb <= 3 else 9 if pb <= 5 else 4 if pb <= 8 else 0
+    else:
+        sc += 7
+    # P/E below own 5Y median (10)
+    own5 = _vf(f, "pe_5y_median")
+    if not math.isnan(own5) and not math.isnan(pe) and own5 > 0:
+        sc += 10 if pe <= own5 else 5 if pe <= own5 * 1.1 else 0
+    sc = int(min(100, sc))
+    # Growth-adjusted guard (Section 33): expensive non-compounder
+    if not math.isnan(peg) and peg > 2.5 and _vf({"g": growth_score}, "g", 0) < 60:
+        sc = min(sc, 30)
+        flag = "Expensive vs Growth"
+    return {"Valuation Score": sc, "Valuation Flag": flag}
+
+
+# -----------------------------------------------------------------------------
+# Section 35: Expected 3-5 year CAGR estimator (transparent heuristic)
+# -----------------------------------------------------------------------------
+def expected_cagr(f: dict, quality_score: float, sector: str = "",
+                  sector_pe_median: float = float("nan")) -> dict:
+    """Return {Expected CAGR %, CAGR from Growth, CAGR from Re-rating,
+    CAGR from Yield, CAGR Band}. An ESTIMATE, never a promise."""
+    if not f:
+        return {"Expected CAGR %": float("nan"), "CAGR from Growth": float("nan"),
+                "CAGR from Re-rating": float("nan"), "CAGR from Yield": float("nan"),
+                "CAGR Band": "No Data"}
+    p3 = _vf(f, "pat_cagr_3y", 0); p5 = _vf(f, "pat_cagr_5y", 0); rv3 = _vf(f, "rev_cagr_3y", 0)
+    g_earn = _clamp(0.5 * p3 + 0.3 * p5 + 0.2 * rv3, 0, 30)
+    qf = _clamp(_vf({"q": quality_score}, "q", 50) / 100.0, 0, 1)
+    g_sustained = g_earn * (0.6 + 0.4 * qf)
+    pe = _vf(f, "pe_ttm")
+    fpe = fair_pe(f, sector, sector_pe_median)
+    if not math.isnan(pe) and pe > 0 and fpe > 0:
+        pe_gap = (fpe - pe) / pe
+        rerate = _clamp(pe_gap, -0.40, 0.40) / 5 * 100
+    else:
+        rerate = 0.0
+    dy = _vf(f, "div_yield", 0)
+    if math.isnan(dy):
+        dy = 0.0
+    total = round(_clamp(g_sustained + rerate + dy, -10, 35), 1)
+    band = ("High Compounder" if total >= 20 else "Target Compounder" if total >= 15
+            else "Steady" if total >= 10 else "Below Goal")
+    return {"Expected CAGR %": total,
+            "CAGR from Growth": round(g_sustained, 1),
+            "CAGR from Re-rating": round(rerate, 1),
+            "CAGR from Yield": round(dy, 1),
+            "CAGR Band": band}
+
+
+# -----------------------------------------------------------------------------
+# Section 36: Composite Value Score
+# -----------------------------------------------------------------------------
+def composite_value(quality, growth, valuation, balance, promoter) -> float:
+    q, g, v = _f(quality), _f(growth), _f(valuation)
+    b, p = _f(balance), _f(promoter)
+    return int(round(0.30 * q + 0.25 * g + 0.20 * v + 0.15 * b + 0.10 * p))
+
+
+# -----------------------------------------------------------------------------
+# Section 34 + 36: Value Trap precedence, then Value Class
+# -----------------------------------------------------------------------------
+VALUE_CLASS_REMARKS = {
+    "Compounder": "Core 3-5 yr candidate. Accumulate in zones.",
+    "Quality-Growth Watch": "Good business; wait for a better price or more proof.",
+    "Cyclical Value": "Cyclical / re-rating play. Size smaller, watch the cycle.",
+    "Turnaround": "Speculative recovery. Small position, proof required.",
+    "Fundamentals Missing": "Cannot verify. Technical-only - do not size as core.",
+    "Value Avoid": "Avoid. Weak business / governance / solvency.",
+}
+
+
+def value_class(scores: dict, f: dict, exp_cagr: float, gate_pass: bool,
+                sector_status: str, illiquid: bool, slope200: float) -> dict:
+    """Return {Value Class, Value Tier, Value Class Remark}."""
+    q = _f(scores.get("Quality Score")); g = _f(scores.get("Growth Score"))
+    val = _f(scores.get("Valuation Score")); comp = _f(scores.get("Composite Value"))
+    pledge = _vf(f, "pledge", 0); pc = _vf(f, "promoter_change_3y", 0)
+    ocf = _vf(f, "ocf_3y", 1); ic = _vf(f, "interest_coverage", 9); de = _vf(f, "debt_to_equity", 0)
+    rv3 = _vf(f, "rev_cagr_3y", 0); p3 = _vf(f, "pat_cagr_3y", 0)
+
+    # ---- Section 34: Trap / Avoid precedence (runs FIRST) ----
+    trap = (
+        q < 35 or pledge > 40 or pc < -8 or (not math.isnan(ocf) and ocf <= 0)
+        or (ic < 1.0 and de > 1.5) or illiquid
+        or (rv3 < 0 and p3 < 0 and slope200 < 0))
+    if trap:
+        cls = "Value Avoid"
+    elif gate_pass and comp >= 70 and exp_cagr >= 15:
+        cls = "Compounder"
+    elif gate_pass and (60 <= comp < 70 or 12 <= exp_cagr < 15):
+        cls = "Quality-Growth Watch"
+    elif 45 <= q < 60 and val >= 65 and sector_status != "Weak":
+        cls = "Cyclical Value"
+    elif 35 <= q < 50 and p3 > 0 and (not math.isnan(ocf) and ocf > 0):
+        cls = "Turnaround"
+    else:
+        cls = "Quality-Growth Watch" if comp >= 55 else "Value Avoid"
+
+    # Conviction tier within Compounder
+    tier = "-"
+    if cls == "Compounder":
+        promoter = _f(scores.get("Promoter Score"))
+        if comp >= 78 and exp_cagr >= 18 and promoter >= 70 and val >= 55:
+            tier = "A"
+        elif val < 45:
+            tier = "C"
+        else:
+            tier = "B"
+    return {"Value Class": cls, "Value Tier": tier,
+            "Value Class Remark": VALUE_CLASS_REMARKS.get(cls, "")}
+
+
+# -----------------------------------------------------------------------------
+# Section 37: Value entry / timing overlay (technicals as servant)
+# -----------------------------------------------------------------------------
+def value_timing(m: dict, cls: str, exp_cagr: float) -> dict:
+    cmp_ = _f(m.get("CMP")); ma200 = _f(m.get("200 DMA")); ma50 = _f(m.get("50 DMA"))
+    slope200 = _f(m.get("200 DMA Slope %"))
+    over = str(m.get("Overextended", "No")) == "Yes"
+    dist200 = _f(m.get("Distance from 200 DMA %"), 99)
+
+    if cls not in ("Compounder", "Quality-Growth Watch", "Cyclical Value"):
+        style = "No accumulation (not a core candidate)"
+    elif over:
+        style = "Wait for pullback (alert at 20/50 DMA)"
+    elif abs(dist200) <= 5 and slope200 > 0:
+        style = "Accumulate near 200 DMA (1/3 now, add on 5% dips)"
+    elif cmp_ > ma50:
+        style = "SIP / staggered (monthly tranches)"
+    else:
+        style = "Wait for reclaim of 50 DMA"
+
+    lo = max(ma200, cmp_ * 0.90) if ma200 > 0 else cmp_ * 0.90
+    zone = f"{round(lo, 2)} - {round(cmp_ * 1.02, 2)}"
+    t3 = round(cmp_ * (1 + _f(exp_cagr) / 100.0) ** 3, 2) if cmp_ > 0 else None
+    t5 = round(cmp_ * (1 + _f(exp_cagr) / 100.0) ** 5, 2) if cmp_ > 0 else None
+    return {
+        "Accumulation Zone": zone,
+        "Value Entry Style": style,
+        "Value Invalidation": ("Reassess if 2 quarters of PAT decline, ROCE < 12, "
+                               "D/E > 1.5, or promoter pledge appears."),
+        "Value Target 3-5Y": f"{t3} - {t5}" if t3 else "-",
+    }
+
+
+# -----------------------------------------------------------------------------
+# Section 38/39: Crossover Buy + new Momentum+Value matrix
+# -----------------------------------------------------------------------------
+def crossover_buy(value_cls: str, momentum_class: str, spring_ready: bool,
+                  overextended: bool, illiquid: bool) -> bool:
+    return bool(
+        value_cls in ("Compounder", "Quality-Growth Watch")
+        and (spring_ready or momentum_class in ("Actionable Breakout", "Elite Momentum"))
+        and not overextended and not illiquid)
+
+
+def matrix_class_qg(composite_momentum, composite_value, value_cls,
+                    crossover: bool) -> str:
+    """Section 39 matrix using the FUNDAMENTALS composite value."""
+    cm, cv = _f(composite_momentum), _f(composite_value)
+    if crossover:
+        return "Crossover Buy"
+    if value_cls == "Compounder" and cm < 65:
+        return "Compounder (accumulate)"
+    if cm >= 70 and cv < 55:
+        return "Momentum Leader"
+    if 60 <= cv <= 70:
+        return "Quality Watch"
+    if value_cls in ("Cyclical Value", "Turnaround"):
+        return "Cyclical / Turnaround"
+    if value_cls == "Value Avoid" or (cm < 50 and cv < 50):
+        return "Avoid"
+    return "Mixed"
+
+
+MATRIX_QG_REMARKS = {
+    "Crossover Buy": "Best - quality business + timing align.",
+    "Compounder (accumulate)": "Buy in zones, ignore short-term chart.",
+    "Momentum Leader": "Trade only; not a hold. Trail tight.",
+    "Quality Watch": "Wait for price or proof.",
+    "Cyclical / Turnaround": "Smaller size, cycle-aware.",
+    "Avoid": "Skip.",
+    "Mixed": "Average on both - watch only.",
+}

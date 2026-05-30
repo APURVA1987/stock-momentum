@@ -543,6 +543,8 @@ def export_outputs(result, holdings_df=None):
     allst = result.get("all_stocks", pd.DataFrame())
     coiled, fresh = result.get("coiled", pd.DataFrame()), result.get("fresh", pd.DataFrame())
     spring_x = result.get("spring", pd.DataFrame())
+    vq_x = result.get("value_quality", pd.DataFrame())
+    xover_x = result.get("crossover", pd.DataFrame())
 
     def _sel(df, col, val, sort="Composite Score"):
         if df is None or df.empty or col not in df:
@@ -582,6 +584,7 @@ def export_outputs(result, holdings_df=None):
         "Elite_Momentum": elite, "Actionable_Breakout": actionable,
         "Strong_Breakout": strong, "Wait_For_Confirmation": wait,
         "Spring_PreBreakout": spring_x,
+        "Value_Quality_Growth": vq_x, "Crossover_Buy": xover_x,
         "Coiled_Ready": coiled, "Fresh_Momentum": fresh, "Early_Watchlist": watch,
         "RS_Leaders": rs_leaders, "Sector_Rotation": sector_rot,
         "Do_Not_Chase": do_not_chase, "Rejected": rejected,
@@ -775,14 +778,15 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     _ALL_TABS = ["My Holdings", "Market Overview", "Sector Rotation", "RS Leaders",
                  "Strong Breakout", "Spring / Pre-Breakout", "Wait for Confirmation",
                  "Coiled / Ready", "Fresh Momentum", "Early Watchlist", "Do Not Chase",
-                 "Momentum Map", "Technical Value Scanner", "Momentum + Value Matrix",
+                 "Momentum Map", "Value / Quality-Growth", "Technical Recovery",
+                 "Momentum + Value Matrix",
                  "Stock Deep Dive", "Rejected / Failed", "Claude Review", "Export"]
     if scan_focus == "Momentum only":
-        _hidden = {"Technical Value Scanner"}
+        _hidden = {"Value / Quality-Growth"}
     elif scan_focus == "Value only":
         _hidden = {"Strong Breakout", "Spring / Pre-Breakout", "Wait for Confirmation",
                    "Coiled / Ready", "Fresh Momentum", "Do Not Chase", "Momentum Map",
-                   "RS Leaders"}
+                   "RS Leaders", "Technical Recovery"}
     else:
         _hidden = set()
     if not _holdings_authed():                # holdings tab vanishes if locked
@@ -1547,8 +1551,12 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         "Value Reversal Ready": "#0b6e2e", "Value Base Forming": "#1f4e79",
         "Deep Value High Risk": "#e08e0b", "Value Trap Avoid": "#8b1e1e"}
     MATRIX_COLORS = {
+        # old (no-fundamentals) labels
         "Best Crossover": "#0b6e2e", "Momentum Leader": "#1e7d32",
-        "Value Recovery": "#1f4e79", "Mixed": "#37474f", "Avoid": "#8b1e1e"}
+        "Value Recovery": "#1f4e79", "Mixed": "#37474f", "Avoid": "#8b1e1e",
+        # v2 Phase 3 quality-growth labels (used when fundamentals are loaded)
+        "Crossover Buy": "#0b6e2e", "Compounder (accumulate)": "#1e7d32",
+        "Quality Watch": "#1f4e79", "Cyclical / Turnaround": "#e08e0b"}
 
     def _vfilter(cls):
         return (allstocks[allstocks.get("Value Classification") == cls]
@@ -1562,9 +1570,76 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         "Value Score", ascending=False) if not allstocks.empty else pd.DataFrame()
     val_trap = _vfilter("Value Trap Avoid") if not allstocks.empty else pd.DataFrame()
 
-    with T["Technical Value Scanner"]:
+    # =====================================================================
+    # VALUE / QUALITY-GROWTH (v2 Phase 3 - fundamentals-driven 3-5 yr scan)
+    # =====================================================================
+    VCLASS_COLORS = {
+        "Compounder": "#1e7d32", "Quality-Growth Watch": "#1f4e79",
+        "Cyclical Value": "#e08e0b", "Turnaround": "#6a1b9a",
+        "Fundamentals Missing": "#555", "Value Avoid": "#8b1e1e"}
+    vq = result.get("value_quality", pd.DataFrame())
+    xover = result.get("crossover", pd.DataFrame())
+    with T["Value / Quality-Growth"]:
+        st.markdown("## Value / Quality-Growth (3-5 year)")
+        st.caption("Fundamentals FIRST: targets businesses that can compound at "
+                   "~15-20% for 3-5 years. Needs a fundamentals CSV (sidebar).")
+        if vq is None or vq.empty:
+            st.info("No fundamentals loaded, or no rows scored. Upload a "
+                    "`fundamentals.csv` in the sidebar (Fundamentals CSV) and re-run "
+                    "the scan. Without it, this tab stays empty by design.")
+        else:
+            def _vqn(cls):
+                return int((vq["Value Class"] == cls).sum())
+            vc = st.columns(5)
+            metric_card(vc[0], "Crossover Buy", len(xover), "#0b6e2e",
+                        sub="quality + timing")
+            metric_card(vc[1], "Compounder", _vqn("Compounder"), VCLASS_COLORS["Compounder"])
+            metric_card(vc[2], "Quality-Growth Watch", _vqn("Quality-Growth Watch"),
+                        VCLASS_COLORS["Quality-Growth Watch"])
+            metric_card(vc[3], "Cyclical Value", _vqn("Cyclical Value"),
+                        VCLASS_COLORS["Cyclical Value"])
+            metric_card(vc[4], "Avoid", _vqn("Value Avoid"), VCLASS_COLORS["Value Avoid"])
+            st.write("")
+            # Crossover Buy is the jackpot list (Section 38) - show first.
+            if not xover.empty:
+                st.success("**Crossover Buy** - verified quality business that is ALSO "
+                           "breaking out or coiling. Highest-priority list.")
+                stock_cards(xover, min(10, len(xover)), "#0b6e2e", [
+                    ("CMP", "CMP"), ("Comp Value", "Composite Value"),
+                    ("CAGR %", "Expected CAGR %"), ("Class", "Value Class"),
+                    ("Quality", "Quality Score"), ("Momentum", "Composite Score")])
+                st.write("")
+            g = st.columns(2)
+            g[0].plotly_chart(px.scatter(
+                vq, x="Composite Value", y="Expected CAGR %", size="Quality Score",
+                color="Value Class", color_discrete_map=VCLASS_COLORS, hover_name="Symbol",
+                hover_data=["Sector", "Growth Score", "Valuation Score", "Value Tier"],
+                title="Value vs Expected CAGR (bubble = quality)", size_max=26),
+                use_container_width=True)
+            comp_only = vq[vq["Value Class"] == "Compounder"].sort_values("Expected CAGR %")
+            if not comp_only.empty:
+                g[1].plotly_chart(px.bar(comp_only.tail(15), x="Expected CAGR %", y="Symbol",
+                                         orientation="h", title="Top compounders by Expected CAGR",
+                                         color="Composite Value", color_continuous_scale="Greens"),
+                                  use_container_width=True)
+            st.divider()
+            vq_cols = ["Symbol", "Company", "Sector", "CMP", "Value Class", "Value Tier",
+                       "Composite Value", "Expected CAGR %", "CAGR Band", "Quality Score",
+                       "Growth Score", "Valuation Score", "Valuation Flag",
+                       "Balance-Sheet Score", "Promoter Score", "Crossover Buy",
+                       "Value Entry Style", "Accumulation Zone", "Value Target 3-5Y"]
+            summary_table(vq, key="vq_tbl", title="Value / Quality-Growth stocks",
+                          caption="Sorted by Composite Value then Expected CAGR. "
+                                  "Compounders pass the hard quality gate (Section 32).",
+                          detail_cols=vq_cols, default_sort="Composite Value")
+
+    with T["Technical Recovery"]:
+        st.markdown("## Technical Recovery")
+        st.caption("Mean-reversion / bounce-off-support setups (technical only). "
+                   "This is NOT the long-term value scan - see the **Value / "
+                   "Quality-Growth** tab for fundamentals-driven 3-5 yr compounders.")
         if "Value Score" not in allstocks.columns or allstocks.empty:
-            st.info("Run a scan to populate the value scanner.")
+            st.info("Run a scan to populate technical recovery setups.")
         else:
             vc = st.columns(4)
             metric_card(vc[0], "Reversal Ready", len(val_reversal), VALUE_COLORS["Value Reversal Ready"])

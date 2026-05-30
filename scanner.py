@@ -305,6 +305,23 @@ def download_universe(symbols, period="5y", local_mode=False, progress=None,
     return _strip_intraday_all(data) if eod_only else data
 
 
+def load_sector_pe() -> dict:
+    """Optional data/sector_pe.csv -> {sector_lower: median_pe}. Empty if absent."""
+    path = os.path.join(DATA_DIR, "sector_pe.csv")
+    if not os.path.exists(path):
+        return {}
+    try:
+        df = pd.read_csv(path)
+        cols = {c.strip().lower(): c for c in df.columns}
+        sc = cols.get("sector"); pc = cols.get("median_pe") or cols.get("pe")
+        if not sc or not pc:
+            return {}
+        return {str(r[sc]).strip().lower(): float(r[pc])
+                for _, r in df.iterrows() if pd.notna(r[pc])}
+    except Exception:
+        return {}
+
+
 def get_nifty_context(period: str = "5y") -> dict:
     """Download Nifty 50 ONCE and work out the overall MARKET REGIME.
 
@@ -1328,6 +1345,7 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
     nifty_20d = ctx["nifty_20d_return"]
     regime = ctx["regime"]
     regime_supportive = regime in ("Bullish", "Neutral")
+    sector_pe_map = load_sector_pe()      # optional data/sector_pe.csv (Phase 3)
 
     stocks = []            # phase-1 store (so we can compute sector strength first)
     rejected_rows = []
@@ -1506,14 +1524,14 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
             0.5 * composite + 0.3 * _f(rowd.get("Spring Score"))
             + 0.2 * _f(rowd.get("Accumulation Score")), 1)
 
-        # --- v2 Phase 2: attach fundamentals sub-scores (if provided) ---
+        # --- v2 Phase 2 + 3: fundamentals + value/quality-growth (if provided) ---
         if fundamentals:
             fdata = fundamentals.get(s["symbol"])
             if fdata:
                 fsc = F.score_fundamentals(fdata, s["sector"])
                 rowd.update(fsc)
-                rowd["Fundamentals Quality Gate"] = (
-                    "Pass" if F.fundamentals_quality_gate(fsc, fdata) else "Fail")
+                gate_pass = F.fundamentals_quality_gate(fsc, fdata)
+                rowd["Fundamentals Quality Gate"] = "Pass" if gate_pass else "Fail"
                 rowd["Fundamentals"] = "Loaded"
                 # Section 5A optional momentum gate: demote junk-quality breakouts.
                 if (momentum_quality_gate
@@ -1523,9 +1541,38 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
                     rowd["Classification"] = classification
                     rowd["Final Remark"] = (str(rowd.get("Final Remark", ""))
                                             + " | demoted: weak fundamentals")
+                # --- Phase 3: valuation -> CAGR -> composite value -> class ---
+                sec_pe = sector_pe_map.get(str(s["sector"]).strip().lower(), float("nan"))
+                vsc = V.score_valuation(fdata, fsc.get("Growth Score"),
+                                        s["sector"], sec_pe)
+                rowd.update(vsc)
+                cagr = V.expected_cagr(fdata, fsc.get("Quality Score"),
+                                       s["sector"], sec_pe)
+                rowd.update(cagr)
+                comp_val = V.composite_value(fsc.get("Quality Score"), fsc.get("Growth Score"),
+                                             vsc.get("Valuation Score"),
+                                             fsc.get("Balance-Sheet Score"), fsc.get("Promoter Score"))
+                rowd["Composite Value"] = comp_val
+                vc = V.value_class({**fsc, **vsc, "Composite Value": comp_val}, fdata,
+                                   cagr.get("Expected CAGR %"), gate_pass,
+                                   rowd.get("Sector Status", "-"),
+                                   rowd.get("Illiquid") == "Yes",
+                                   _f(m.get("200 DMA Slope %")))
+                rowd.update(vc)
+                rowd.update(V.value_timing(m, vc["Value Class"], cagr.get("Expected CAGR %")))
+                # Section 38/39: crossover + quality-growth matrix
+                xover = V.crossover_buy(vc["Value Class"], rowd.get("Momentum Class", ""),
+                                        rowd.get("Spring Ready") == "Yes",
+                                        rowd.get("Overextended") == "Yes",
+                                        rowd.get("Illiquid") == "Yes")
+                rowd["Crossover Buy"] = "Yes" if xover else "No"
+                rowd["Matrix Class"] = V.matrix_class_qg(composite, comp_val,
+                                                         vc["Value Class"], xover)
+                rowd["Matrix Remark"] = V.MATRIX_QG_REMARKS.get(rowd["Matrix Class"], "")
             else:
                 rowd["Fundamentals"] = "Missing"
                 rowd["Fundamentals Quality Gate"] = "No Data"
+                rowd["Value Class"] = "Fundamentals Missing"
 
         all_rows.append(rowd)
         if is_coiled:
@@ -1565,6 +1612,16 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
     fresh_df = finalise(fresh_rows, ["Fresh Momentum Score", "RS Score"], [False, False])
     spring_df = finalise(spring_rows, ["Spring Score", "Accumulation Score"], [False, False])
     all_df = finalise(all_rows, ["Momentum Readiness"], [False])
+    # --- Phase 3 value frames (only populated when fundamentals were provided) ---
+    value_quality_df, crossover_df = pd.DataFrame(), pd.DataFrame()
+    if fundamentals and all_rows:
+        vq = pd.DataFrame([r for r in all_rows if "Composite Value" in r])
+        if not vq.empty:
+            value_quality_df = vq.sort_values(
+                ["Composite Value", "Expected CAGR %"], ascending=[False, False]
+            ).reset_index(drop=True)
+            crossover_df = value_quality_df[
+                value_quality_df.get("Crossover Buy") == "Yes"].reset_index(drop=True)
     # Accumulation view: top names by Accumulation Score (independent of class).
     accumulation_df = pd.DataFrame()
     if all_rows:
@@ -1577,6 +1634,7 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
         "strong": strong_df, "wait": wait_df, "watchlist": watch_df,
         "coiled": coiled_df, "fresh": fresh_df,
         "spring": spring_df, "accumulation": accumulation_df,
+        "value_quality": value_quality_df, "crossover": crossover_df,
         "rejected": rejected_df, "failed": failed,
         "all_stocks": all_df, "sector_rotation": sector_rotation,
         "price_data": data,   # in-memory OHLCV cache for the Deep-Dive chart
