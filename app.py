@@ -36,6 +36,15 @@ os.makedirs(OUTPUTS_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
 
 
+# st.fragment isolates dropdown-driven sections (Stock / Holding / Value Deep
+# Dive) so changing the selected stock re-runs ONLY that block - the active
+# tab and scroll position are preserved. Falls back to a no-op decorator on
+# older Streamlit versions.
+_fragment = (getattr(st, "fragment", None)
+             or getattr(st, "experimental_fragment", None)
+             or (lambda f: f))
+
+
 def _holdings_authed() -> bool:
     """Holdings stay private unless the visitor enters the access password
     configured in `st.secrets["APP_PASSWORD"]`. If no password is set in
@@ -420,7 +429,7 @@ def _write_workbook(path, sheets: dict):
     """Write an ordered {sheet_name: df} mapping to one .xlsx.
 
     Uses keyword `sheet_name=` (required by pandas 3.x, where it is keyword-only)
-    and forces a visible active sheet before save — this avoids the
+    and forces a visible active sheet before save - this avoids the
     'At least one sheet must be visible' IndexError seen with openpyxl + pandas 3.
     """
     with pd.ExcelWriter(path, engine="openpyxl") as w:
@@ -847,44 +856,50 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                     if "Value Classification" in holdings_df.columns else pd.DataFrame()
                 show_h(v_h, "No holdings currently in value-recovery setups.")
 
-            # ---- G. Holding Deep Dive ----
+            # ---- G. Holding Deep Dive (fragment-isolated) ----
             with sub[6]:
-                if holdings_df.empty:
-                    st.info("Upload holdings to deep-dive.")
-                else:
-                    pick = st.selectbox("Select holding", holdings_df["symbol"].tolist(),
-                                        key="hold_deepdive")
-                    r = holdings_df[holdings_df["symbol"] == pick].iloc[0]
-                    cls = str(r.get("Classification", "")) or "No Scanner Data"
-                    action = str(r.get("holding_action", "")) or "No Scanner Data"
-                    st.markdown(
-                        f"### {r['symbol']} - {r.get('company', '')}<br>"
-                        f"{badge(action, ACT_COLORS.get(action, '#555'))} &nbsp; "
-                        f"{badge(cls, CLASS_COLORS.get(cls, '#555'))}",
-                        unsafe_allow_html=True)
-                    st.caption(r.get("holding_remark", ""))
-                    dc = st.columns(5)
-                    metric_card(dc[0], "Qty", r.get("quantity"), "#37474f")
-                    metric_card(dc[1], "Avg Cost", r.get("avg_cost"), "#37474f")
-                    metric_card(dc[2], "CMP / LTP", r.get("CMP") if pd.notna(r.get("CMP")) else r.get("ltp"), "#37474f")
-                    pnl_v = r.get("pnl", 0) or 0
-                    metric_card(dc[3], "P&L", pnl_v, "#1e7d32" if pnl_v >= 0 else "#8b1e1e")
-                    pnl_p = r.get("pnl_pct", 0) or 0
-                    metric_card(dc[4], "P&L %", pnl_p, "#1e7d32" if pnl_p >= 0 else "#8b1e1e")
-                    dc2 = st.columns(5)
-                    metric_card(dc2[0], "Composite", r.get("Composite Score", "-"), "#1f4e79")
-                    metric_card(dc2[1], "RS Score", r.get("RS Score", "-"), "#1f4e79")
-                    metric_card(dc2[2], "Sector Rank", r.get("Sector Rank", "-"), "#1f4e79")
-                    metric_card(dc2[3], "Avg vs CMP %", r.get("avg_vs_cmp_pct", "-"), "#37474f")
-                    metric_card(dc2[4], "CMP vs 200DMA %", r.get("cmp_vs_200dma_pct", "-"), "#37474f")
-                    st.write(f"Trigger: {r.get('Trigger Price', '-')} | "
-                             f"Invalidation/SL: {r.get('Invalidation Level', '-')} | "
-                             f"Confirmation: {r.get('Confirmation Needed', '-')}")
-                    # Chart with avg-buy line
-                    if pd.notna(r.get("CMP")):
-                        make_stock_chart(f"{pick}.NS", period,
-                                         trigger=r.get("Trigger Price"),
-                                         invalidation=r.get("Invalidation Level"))
+                @_fragment
+                def _holding_deep_dive():
+                    if holdings_df.empty:
+                        st.info("Upload holdings to deep-dive.")
+                        return
+                    try:
+                        pick = st.selectbox("Select holding", holdings_df["symbol"].tolist(),
+                                            key="hold_deepdive")
+                        r = holdings_df[holdings_df["symbol"] == pick].iloc[0]
+                        cls = str(r.get("Classification", "")) or "No Scanner Data"
+                        action = str(r.get("holding_action", "")) or "No Scanner Data"
+                        st.markdown(
+                            f"### {r['symbol']} - {r.get('company', '')}<br>"
+                            f"{badge(action, ACT_COLORS.get(action, '#555'))} &nbsp; "
+                            f"{badge(cls, CLASS_COLORS.get(cls, '#555'))}",
+                            unsafe_allow_html=True)
+                        st.caption(r.get("holding_remark", ""))
+                        dc = st.columns(5)
+                        metric_card(dc[0], "Qty", r.get("quantity"), "#37474f")
+                        metric_card(dc[1], "Avg Cost", r.get("avg_cost"), "#37474f")
+                        metric_card(dc[2], "CMP / LTP", r.get("CMP") if pd.notna(r.get("CMP")) else r.get("ltp"), "#37474f")
+                        pnl_v = r.get("pnl", 0) or 0
+                        metric_card(dc[3], "P&L", pnl_v, "#1e7d32" if pnl_v >= 0 else "#8b1e1e")
+                        pnl_p = r.get("pnl_pct", 0) or 0
+                        metric_card(dc[4], "P&L %", pnl_p, "#1e7d32" if pnl_p >= 0 else "#8b1e1e")
+                        dc2 = st.columns(5)
+                        metric_card(dc2[0], "Composite", r.get("Composite Score", "-"), "#1f4e79")
+                        metric_card(dc2[1], "RS Score", r.get("RS Score", "-"), "#1f4e79")
+                        metric_card(dc2[2], "Sector Rank", r.get("Sector Rank", "-"), "#1f4e79")
+                        metric_card(dc2[3], "Avg vs CMP %", r.get("avg_vs_cmp_pct", "-"), "#37474f")
+                        metric_card(dc2[4], "CMP vs 200DMA %", r.get("cmp_vs_200dma_pct", "-"), "#37474f")
+                        st.write(f"Trigger: {r.get('Trigger Price', '-')} | "
+                                 f"Invalidation/SL: {r.get('Invalidation Level', '-')} | "
+                                 f"Confirmation: {r.get('Confirmation Needed', '-')}")
+                        if pd.notna(r.get("CMP")):
+                            make_stock_chart(f"{pick}.NS", period,
+                                             trigger=r.get("Trigger Price"),
+                                             invalidation=r.get("Invalidation Level"))
+                    except Exception as exc:
+                        st.error(f"Could not render Holding Deep Dive: {exc}. "
+                                 "Try selecting a different holding.")
+                _holding_deep_dive()
 
     # =====================================================================
     # 1) MARKET OVERVIEW
@@ -1341,45 +1356,51 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
             with vsub[4]:
                 st.error("Cheap but technically weak. Avoid until structure improves.")
                 vshow(val_trap, "No Value Trap names.")
-            # --- Value Deep Dive ---
+            # --- Value Deep Dive (fragment-isolated) ---
             with vsub[5]:
-                pool = pd.concat([val_reversal, val_base, val_deep], ignore_index=True) \
-                    if not (val_reversal.empty and val_base.empty and val_deep.empty) else pd.DataFrame()
-                if pool.empty:
-                    st.info("No value candidates to deep-dive.")
-                else:
-                    pick = st.selectbox("Select a value stock", pool["Symbol"].tolist(),
-                                        key="val_dive")
-                    r = pool[pool["Symbol"] == pick].iloc[0]
-                    cls = r["Value Classification"]
-                    st.markdown(
-                        f"### {r['Symbol']} - {r['Company']}<br>"
-                        f"{badge(cls, VALUE_COLORS.get(cls, '#555'))} &nbsp; "
-                        f"{badge(r.get('Risk Level', '-'), RISK_COLORS.get(r.get('Risk Level', ''), '#555'))}",
-                        unsafe_allow_html=True)
-                    st.caption(r.get("Value Remark", ""))
-                    dvc = st.columns(2)
-                    dvc[0].plotly_chart(score_gauge(r["Value Score"]), use_container_width=True)
-                    # Component breakdown
-                    bd = pd.DataFrame({
-                        "Component": ["Correction", "Stabilisation", "Reversal", "RS", "Risk"],
-                        "Score": [r.get("Value Correction Score", 0),
-                                  r.get("Value Stabilisation Score", 0),
-                                  r.get("Value Reversal Score", 0),
-                                  r.get("Value RS Score", 0),
-                                  r.get("Value Risk Score", 0)],
-                        "Max":   [20, 25, 25, 15, 15]})
-                    dvc[1].plotly_chart(px.bar(bd, x="Score", y="Component", orientation="h",
-                                               title="Value-score breakdown",
-                                               color="Score", color_continuous_scale="Tealgrn"),
-                                        use_container_width=True)
-                    st.write(f"Entry style: **{r.get('Value Entry Style', '-')}**  |  "
-                             f"Trigger: {r.get('Value Trigger Price', '-')}  |  "
-                             f"Invalidation: {r.get('Value Invalidation Level', '-')}  |  "
-                             f"Target zone: {r.get('Value Target Zone', '-')}")
-                    make_stock_chart(f"{pick}.NS", period,
-                                     trigger=r.get("Value Trigger Price"),
-                                     invalidation=r.get("Value Invalidation Level"))
+                @_fragment
+                def _value_deep_dive():
+                    pool = pd.concat([val_reversal, val_base, val_deep], ignore_index=True) \
+                        if not (val_reversal.empty and val_base.empty and val_deep.empty) else pd.DataFrame()
+                    if pool.empty:
+                        st.info("No value candidates to deep-dive.")
+                        return
+                    try:
+                        pick = st.selectbox("Select a value stock", pool["Symbol"].tolist(),
+                                            key="val_dive")
+                        r = pool[pool["Symbol"] == pick].iloc[0]
+                        cls = r["Value Classification"]
+                        st.markdown(
+                            f"### {r['Symbol']} - {r['Company']}<br>"
+                            f"{badge(cls, VALUE_COLORS.get(cls, '#555'))} &nbsp; "
+                            f"{badge(r.get('Risk Level', '-'), RISK_COLORS.get(r.get('Risk Level', ''), '#555'))}",
+                            unsafe_allow_html=True)
+                        st.caption(r.get("Value Remark", ""))
+                        dvc = st.columns(2)
+                        dvc[0].plotly_chart(score_gauge(r["Value Score"]), use_container_width=True)
+                        bd = pd.DataFrame({
+                            "Component": ["Correction", "Stabilisation", "Reversal", "RS", "Risk"],
+                            "Score": [r.get("Value Correction Score", 0),
+                                      r.get("Value Stabilisation Score", 0),
+                                      r.get("Value Reversal Score", 0),
+                                      r.get("Value RS Score", 0),
+                                      r.get("Value Risk Score", 0)],
+                            "Max":   [20, 25, 25, 15, 15]})
+                        dvc[1].plotly_chart(px.bar(bd, x="Score", y="Component", orientation="h",
+                                                   title="Value-score breakdown",
+                                                   color="Score", color_continuous_scale="Tealgrn"),
+                                            use_container_width=True)
+                        st.write(f"Entry style: **{r.get('Value Entry Style', '-')}**  |  "
+                                 f"Trigger: {r.get('Value Trigger Price', '-')}  |  "
+                                 f"Invalidation: {r.get('Value Invalidation Level', '-')}  |  "
+                                 f"Target zone: {r.get('Value Target Zone', '-')}")
+                        make_stock_chart(f"{pick}.NS", period,
+                                         trigger=r.get("Value Trigger Price"),
+                                         invalidation=r.get("Value Invalidation Level"))
+                    except Exception as exc:
+                        st.error(f"Could not render Value Deep Dive: {exc}. "
+                                 "Try selecting a different stock.")
+                _value_deep_dive()
 
     # =====================================================================
     # MOMENTUM + VALUE MATRIX (Phase 2)
@@ -1428,100 +1449,104 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     # 7) STOCK DEEP DIVE
     # =====================================================================
     with T["Stock Deep Dive"]:
+        # The fragment isolates the dropdown re-run to JUST this section, so
+        # changing the selected stock no longer resets the scroll position or
+        # ejects you from the tab. Any rendering error shows a friendly message
+        # instead of blanking out the page.
         dd_src = allstocks if not allstocks.empty else allc
-        if dd_src.empty:
-            st.info("Run a scan to deep-dive a stock.")
-        else:
-            pick = st.selectbox("Select a stock", dd_src["Symbol"].tolist())
-            r = dd_src[dd_src["Symbol"] == pick].iloc[0]
-            cls = r["Classification"]
-            left, right = st.columns([1.2, 1])
-            with left:
-                mclass = r.get("Momentum Class", cls)
-                st.markdown(
-                    f"### {r['Symbol']} — {r['Company']}\n"
-                    f"{badge(mclass, CLASS_COLORS.get(cls, '#1f4e79'))} &nbsp; "
-                    f"{badge(r['Risk Level'], RISK_COLORS.get(r['Risk Level'], '#555'))}",
-                    unsafe_allow_html=True)
-                st.write(
-                    f"**Sector:** {r['Sector']} (rank {r.get('Sector Rank', '-')}, "
-                    f"{r.get('Sector Status', '-')})  |  **Composite:** {r.get('Composite Score', '-')}  "
-                    f"|  **Old Score:** {r['Score']}  |  **RS Score:** {r.get('RS Score', '-')}  "
-                    f"|  **Breakout Quality:** {r.get('Breakout Quality', '-')} "
-                    f"({r.get('Breakout Quality Status', '-')})  |  "
-                    f"**Pullback:** {r.get('Pullback Type', '-')} "
-                    f"(quality {r.get('Pullback Quality', '-')})")
-                # Decision box: Do Not Chase > Coiled > Fresh > Momentum Class.
-                if r.get("Overextended") == "Yes":
-                    st.error(f"Good stock may be overextended. Avoid fresh entry now. "
-                             f"{r.get('Wait Condition', '')}")
-                elif r.get("Coiled Ready") == "Yes":
-                    st.warning("Coiled / Ready: preparing. Wait for breakout with volume.")
-                elif r.get("Fresh Momentum") == "Yes":
-                    st.success("Fresh momentum starting. Prefer small pullback or breakout sustain.")
-                else:
-                    msg = {"Elite Momentum":
-                           ("success", "Best quality momentum candidate. Still confirm chart/news."),
-                           "Actionable Breakout":
-                           ("success", "Can be considered after manual confirmation."),
-                           "Wait for Confirmation":
-                           ("warning", "Set alert. Do not enter yet."),
-                           "Early Watchlist": ("info", "Observe only.")}.get(
-                               mclass, ("error", "Avoid for now."))
-                    getattr(st, msg[0])(msg[1])
-            with right:
-                # Main gauge = Composite Momentum Score
-                st.plotly_chart(score_gauge(r.get("Composite Score", r["Score"])),
-                                use_container_width=True)
-            # Score breakdown bar (each sub-score normalised to 0-100)
-            breakdown = pd.DataFrame({
-                "Component": ["Trend", "RS", "Sector", "Breakout Quality", "Pullback Quality", "Risk"],
-                "Score": [safe_num(r.get("Trend Score")) * 4, safe_num(r.get("RS Score")),
-                          safe_num(r.get("Sector Strength Score")), safe_num(r.get("Breakout Quality")),
-                          safe_num(r.get("Pullback Quality")),
-                          safe_num(r.get("Risk Score")) * 100 / 15]})
-            st.plotly_chart(px.bar(breakdown, x="Score", y="Component", orientation="h",
-                                   range_x=[0, 100], title="Score breakdown (0-100 each)",
-                                   color="Score", color_continuous_scale="RdYlGn"),
-                            use_container_width=True)
-            # Indicator cards
-            ic = st.columns(7)
-            for col, lbl, key in zip(ic,
-                ["RSI", "ADX", "Vol Ratio", "Rel Str %", "Dist 52WH %", "Dist 200 %", "Risk/Reward"],
-                ["RSI 14", "ADX 14", "Volume Ratio", "Relative Strength %",
-                 "Distance from 52W High %", "Distance from 200 DMA %", "Risk Reward"]):
-                metric_card(col, lbl, r.get(key, "-"), "#37474f")
-            st.write(f"Trigger: {r['Trigger Price']} | Alert: {r['Suggested Alert Price']} "
-                     f"| Invalidation/SL: {r['Invalidation Level']}")
-            make_stock_chart(f"{pick}.NS", period, trigger=r.get("Trigger Price"),
-                             invalidation=r.get("Invalidation Level"))
 
-            # --- Fundamentals from Screener.in (on demand, for this one stock) ---
-            st.markdown(f"#### Fundamentals "
-                        f"&nbsp;[Open on Screener.in &#128279;]({fundamentals.screener_url(pick)})")
-            with st.expander("Load key fundamentals from Screener.in", expanded=False):
-                if st.button("Fetch fundamentals", key=f"fund_{pick}"):
-                    with st.spinner("Fetching from Screener.in ..."):
-                        fund = cached_fundamentals(pick)
-                    if not fund:
-                        st.info("Fundamentals unavailable (Screener may be blocking this "
-                                "server, or the symbol differs on Screener). Use the link above.")
+        @_fragment
+        def _stock_deep_dive():
+            if dd_src.empty:
+                st.info("Run a scan to deep-dive a stock.")
+                return
+            try:
+                pick = st.selectbox("Select a stock", dd_src["Symbol"].tolist(),
+                                    key="sdd_pick")
+                r = dd_src[dd_src["Symbol"] == pick].iloc[0]
+                cls = r["Classification"]
+                left, right = st.columns([1.2, 1])
+                with left:
+                    mclass = r.get("Momentum Class", cls)
+                    st.markdown(
+                        f"### {r['Symbol']} - {r['Company']}\n"
+                        f"{badge(mclass, CLASS_COLORS.get(cls, '#1f4e79'))} &nbsp; "
+                        f"{badge(r['Risk Level'], RISK_COLORS.get(r['Risk Level'], '#555'))}",
+                        unsafe_allow_html=True)
+                    st.write(
+                        f"**Sector:** {r['Sector']} (rank {r.get('Sector Rank', '-')}, "
+                        f"{r.get('Sector Status', '-')})  |  **Composite:** {r.get('Composite Score', '-')}  "
+                        f"|  **Old Score:** {r['Score']}  |  **RS Score:** {r.get('RS Score', '-')}  "
+                        f"|  **Breakout Quality:** {r.get('Breakout Quality', '-')} "
+                        f"({r.get('Breakout Quality Status', '-')})  |  "
+                        f"**Pullback:** {r.get('Pullback Type', '-')} "
+                        f"(quality {r.get('Pullback Quality', '-')})")
+                    if r.get("Overextended") == "Yes":
+                        st.error(f"Good stock may be overextended. Avoid fresh entry now. "
+                                 f"{r.get('Wait Condition', '')}")
+                    elif r.get("Coiled Ready") == "Yes":
+                        st.warning("Coiled / Ready: preparing. Wait for breakout with volume.")
+                    elif r.get("Fresh Momentum") == "Yes":
+                        st.success("Fresh momentum starting. Prefer small pullback or breakout sustain.")
                     else:
-                        # Show the headline ratios as cards, rest as a small table.
-                        keys = [k for k in fund if k != "_url"]
-                        headline = [k for k in ["Market Cap", "Current Price", "Stock P/E",
-                                                "Book Value", "ROCE", "ROE", "Dividend Yield",
-                                                "Face Value"] if k in fund]
-                        fcols = st.columns(min(4, max(1, len(headline))))
-                        for j, k in enumerate(headline):
-                            metric_card(fcols[j % len(fcols)], k, fund[k], "#37474f")
-                        st.dataframe(pd.DataFrame(
-                            [{"Ratio": k, "Value": fund[k]} for k in keys]),
-                            use_container_width=True, hide_index=True)
+                        msg = {"Elite Momentum":
+                               ("success", "Best quality momentum candidate. Still confirm chart/news."),
+                               "Actionable Breakout":
+                               ("success", "Can be considered after manual confirmation."),
+                               "Wait for Confirmation":
+                               ("warning", "Set alert. Do not enter yet."),
+                               "Early Watchlist": ("info", "Observe only.")}.get(
+                                   mclass, ("error", "Avoid for now."))
+                        getattr(st, msg[0])(msg[1])
+                with right:
+                    st.plotly_chart(score_gauge(r.get("Composite Score", r["Score"])),
+                                    use_container_width=True)
+                breakdown = pd.DataFrame({
+                    "Component": ["Trend", "RS", "Sector", "Breakout Quality", "Pullback Quality", "Risk"],
+                    "Score": [safe_num(r.get("Trend Score")) * 4, safe_num(r.get("RS Score")),
+                              safe_num(r.get("Sector Strength Score")), safe_num(r.get("Breakout Quality")),
+                              safe_num(r.get("Pullback Quality")),
+                              safe_num(r.get("Risk Score")) * 100 / 15]})
+                st.plotly_chart(px.bar(breakdown, x="Score", y="Component", orientation="h",
+                                       range_x=[0, 100], title="Score breakdown (0-100 each)",
+                                       color="Score", color_continuous_scale="RdYlGn"),
+                                use_container_width=True)
+                ic = st.columns(7)
+                for col, lbl, key in zip(ic,
+                    ["RSI", "ADX", "Vol Ratio", "Rel Str %", "Dist 52WH %", "Dist 200 %", "Risk/Reward"],
+                    ["RSI 14", "ADX 14", "Volume Ratio", "Relative Strength %",
+                     "Distance from 52W High %", "Distance from 200 DMA %", "Risk Reward"]):
+                    metric_card(col, lbl, r.get(key, "-"), "#37474f")
+                st.write(f"Trigger: {r['Trigger Price']} | Alert: {r['Suggested Alert Price']} "
+                         f"| Invalidation/SL: {r['Invalidation Level']}")
+                make_stock_chart(f"{pick}.NS", period, trigger=r.get("Trigger Price"),
+                                 invalidation=r.get("Invalidation Level"))
+                st.markdown(f"#### Fundamentals "
+                            f"&nbsp;[Open on Screener.in &#128279;]({fundamentals.screener_url(pick)})")
+                with st.expander("Load key fundamentals from Screener.in", expanded=False):
+                    if st.button("Fetch fundamentals", key=f"fund_{pick}"):
+                        with st.spinner("Fetching from Screener.in ..."):
+                            fund = cached_fundamentals(pick)
+                        if not fund:
+                            st.info("Fundamentals unavailable (Screener may be blocking this "
+                                    "server, or the symbol differs on Screener). Use the link above.")
+                        else:
+                            keys = [k for k in fund if k != "_url"]
+                            headline = [k for k in ["Market Cap", "Current Price", "Stock P/E",
+                                                    "Book Value", "ROCE", "ROE", "Dividend Yield",
+                                                    "Face Value"] if k in fund]
+                            fcols = st.columns(min(4, max(1, len(headline))))
+                            for j, k in enumerate(headline):
+                                metric_card(fcols[j % len(fcols)], k, fund[k], "#37474f")
+                            st.dataframe(pd.DataFrame(
+                                [{"Ratio": k, "Value": fund[k]} for k in keys]),
+                                use_container_width=True, hide_index=True)
+            except Exception as exc:
+                st.error(f"Could not render Stock Deep Dive: {exc}. "
+                         "Try selecting a different stock.")
 
-    # =====================================================================
-    # 8) REJECTED / FAILED
-    # =====================================================================
+        _stock_deep_dive()
+
     with T["Rejected / Failed"]:
         if rejected is not None and not rejected.empty and "Reason" in rejected:
             rc = rejected["Reason"].value_counts().reset_index()
