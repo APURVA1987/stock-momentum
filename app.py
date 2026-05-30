@@ -20,6 +20,7 @@ import streamlit as st
 import scanner
 import indicators as ind
 import holdings as H
+import backtest as BT
 import fundamentals
 
 
@@ -780,13 +781,13 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                  "Coiled / Ready", "Fresh Momentum", "Early Watchlist", "Do Not Chase",
                  "Momentum Map", "Value / Quality-Growth", "Technical Recovery",
                  "Momentum + Value Matrix",
-                 "Stock Deep Dive", "Rejected / Failed", "Claude Review", "Export"]
+                 "Stock Deep Dive", "Backtest", "Rejected / Failed", "Claude Review", "Export"]
     if scan_focus == "Momentum only":
         _hidden = {"Value / Quality-Growth"}
     elif scan_focus == "Value only":
         _hidden = {"Strong Breakout", "Spring / Pre-Breakout", "Wait for Confirmation",
                    "Coiled / Ready", "Fresh Momentum", "Do Not Chase", "Momentum Map",
-                   "RS Leaders", "Technical Recovery"}
+                   "RS Leaders", "Technical Recovery", "Backtest"}
     else:
         _hidden = set()
     if not _holdings_authed():                # holdings tab vanishes if locked
@@ -1997,6 +1998,78 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                          "Try selecting a different stock.")
 
         _stock_deep_dive()
+
+    # =====================================================================
+    # BACKTEST (momentum-only, point-in-time, no look-ahead)
+    # =====================================================================
+    with T["Backtest"]:
+        st.markdown("## Backtest (Momentum)")
+        st.caption("Replays the momentum signals on PAST dates using only the data "
+                   "available then (no look-ahead), and measures the forward 15- and "
+                   "30-day return per bucket. Runs on the prices already downloaded "
+                   "for this scan - no new downloads.")
+        st.warning("The VALUE / Quality-Growth scan is NOT backtested: it needs "
+                   "point-in-time fundamentals we do not have. Using today's "
+                   "fundamentals on past prices is look-ahead bias. Momentum only here.")
+        pdata = st.session_state.get("price_data") or {}
+        if not pdata:
+            st.info("Run a scan first - the backtest reuses that scan's price data.")
+        else:
+            bc = st.columns(3)
+            look_years = bc[0].selectbox("Look-back window", ["1 year", "2 years", "3 years"],
+                                         index=1, key="bt_look")
+            freq = bc[1].selectbox("Sample frequency", ["Weekly", "Fortnightly", "Monthly"],
+                                   index=2, key="bt_freq")
+            min_sc = bc[2].number_input("Min score for Strong gate", 0, 100, 65, 5, key="bt_score")
+            look_map = {"1 year": 252, "2 years": 504, "3 years": 756}
+            step_map = {"Weekly": 5, "Fortnightly": 10, "Monthly": 21}
+            n_syms = len([s for s in pdata if s != "^NSEI"])
+            st.caption(f"Universe in cache: {n_syms} stocks. A wider window / finer "
+                       "frequency is more thorough but slower.")
+            if st.button("Run backtest", type="primary", key="bt_run"):
+                prog = st.progress(0.0)
+                stat = st.empty()
+
+                def _bp(done, total, sym):
+                    prog.progress(done / total)
+                    stat.write(f"Backtesting {done}/{total}: {sym}")
+
+                with st.spinner("Replaying historical signals (no new downloads) ..."):
+                    bt = BT.run_momentum_backtest(
+                        pdata, period_lookback_days=look_map[look_years],
+                        sample_step=step_map[freq], min_score=int(min_sc), progress=_bp)
+                prog.empty(); stat.empty()
+                st.session_state["bt_result"] = bt
+
+            bt = st.session_state.get("bt_result")
+            if bt and not bt.get("summary", pd.DataFrame()).empty:
+                summ = bt["summary"]
+                st.caption(f"Based on {bt['samples']} point-in-time stock-date samples.")
+                # Bar chart: avg forward returns per bucket vs baseline
+                melt = summ.melt(id_vars="Bucket",
+                                 value_vars=["Avg 15D Ret %", "Avg 30D Ret %"],
+                                 var_name="Horizon", value_name="Avg Return %")
+                st.plotly_chart(px.bar(melt, x="Bucket", y="Avg Return %", color="Horizon",
+                                       barmode="group", title="Average forward return by bucket"),
+                                use_container_width=True)
+                wmelt = summ.melt(id_vars="Bucket",
+                                  value_vars=["Win% 15D", "Win% 30D"],
+                                  var_name="Horizon", value_name="Win %")
+                st.plotly_chart(px.bar(wmelt, x="Bucket", y="Win %", color="Horizon",
+                                       barmode="group", title="Win-rate (% of samples positive)"),
+                                use_container_width=True)
+                st.subheader("Backtest summary")
+                st.caption("Compare each signal bucket against the Baseline row. A "
+                           "bucket that beats baseline on BOTH avg return and win-rate "
+                           "is adding edge. Small sample counts are not reliable.")
+                st.dataframe(summ, use_container_width=True, hide_index=True)
+                st.caption("Honest limits: per-stock signals only (RS-percentile / "
+                           "sector-bonus features not replayed); regime assumed Neutral; "
+                           "no costs/slippage; survivorship - the cache only holds names "
+                           "that exist today. Treat as directional, not a P&L promise.")
+            elif bt:
+                st.info("No signal samples in the chosen window. Try a wider look-back "
+                        "or finer frequency.")
 
     with T["Rejected / Failed"]:
         if rejected is not None and not rejected.empty and "Reason" in rejected:

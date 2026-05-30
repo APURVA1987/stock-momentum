@@ -627,3 +627,43 @@ All v1 Section 27 rules hold. Additions:
 - **Phase 2 PENDING**: Section 30-32 fundamentals layer (Screener CSV ingest + sub-scores + quality gate).
 - **Phase 3 DONE**: value.py gains score_valuation (growth-adjusted + Expensive-vs-Growth guard), expected_cagr (transparent estimator + CAGR bands), composite_value, value_class (Section 34 trap precedence first; Compounder/Quality-Growth Watch/Cyclical Value/Turnaround/Avoid + A/B/C tiers), value_timing (accumulation zone/entry/invalidation/3-5yr target), crossover_buy + matrix_class_qg. Optional data/sector_pe.csv. run_scan now returns value_quality + crossover frames. New UI tab **Value / Quality-Growth** (Crossover Buy cards + Value-vs-CAGR scatter + compounder bar + filter table); old technical Value tab relabelled **Technical Recovery** (columns kept for back-compat). Export sheets Value_Quality_Growth + Crossover_Buy.
 - **Phase 4 DONE**: holdings.py dual-lens (Section 40) - pulls Value Class / Composite Value / Expected CAGR / Crossover Buy into the holdings merge; two new holding actions: "Core Compounder - Hold / Add in Zones" (held Compounder, not overextended) and "Fundamental + Technical Breakdown - Exit Review" (Value Avoid + loss + below falling 200 DMA). New top-level **Crossover Buy** tab (Section 38) showing the dual-scan jackpot list. Matrix colours extended for QG labels. v2 IMPLEMENTATION COMPLETE.
+
+---
+
+## 47. Backtesting (momentum-only) + why the value scan is excluded
+
+`backtest.py` provides a **point-in-time, no-look-ahead momentum backtest**,
+surfaced as the **Backtest** tab. For each sampled past date T and each stock it
+slices the price history to data available up to T, recomputes the real momentum
+signals (`compute_metrics` + `classify` + fresh/spring/accumulation), labels the
+stock's bucket, and measures the forward 15- and 30-trading-day return. Results
+aggregate per bucket (Strong Breakout, Wait, Fresh Momentum, Spring Ready, Early
+Watchlist) against a **Baseline (all stock-dates)** row, reporting avg/median
+forward return and win-rate.
+
+**Faithfulness simplifications (documented, all conservative):**
+- Per-stock signals only. Cross-sectional features that need the WHOLE universe
+  ranked at date T (RS Score percentile, RS Leader, sector bonus) are not
+  replayed - the Strong/Wait hard gates and the Spring/Fresh flags are per-stock
+  and ARE replayed faithfully.
+- Regime assumed Neutral and sector-top bonus off at each T (no historical
+  sector table reconstruction). Marginally conservative, never optimistic.
+- No transaction costs / slippage. Survivorship: the price cache only holds
+  symbols that exist today. Treat results as directional, not a P&L promise.
+
+### Why the VALUE / Quality-Growth scan is NOT backtested
+The value scan is driven by a **current fundamentals snapshot** (the Screener
+CSV). An honest value backtest needs **point-in-time fundamentals** - the ROCE,
+growth, P/E, promoter holding, pledge etc. *as they were reported on date T*.
+We do not have that history. Using today's fundamentals on past prices is
+**look-ahead bias** (the scan would "know" a turnaround before it happened) plus
+**survivorship bias** (failed/delisted names are gone from the CSV). That would
+manufacture fake outperformance and could mislead real-money decisions, so the
+value scan is deliberately excluded from the backtest.
+
+**How to enable a value backtest later (the honest path):** save a dated
+snapshot of your fundamentals CSV every quarter after results season
+(`data/fundamentals_YYYYQn.csv`). After a few years of accumulated snapshots,
+a value backtest can read the snapshot in force at each historical date T and
+measure 1-3 year forward returns without look-ahead. This is the only
+methodologically sound way and is listed in Section 45 future enhancements.
