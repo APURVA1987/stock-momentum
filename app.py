@@ -321,9 +321,22 @@ with st.sidebar.expander("Or: upload NSE index CSVs (one per cap tier)"):
     for upl, cap in [(nse_large, "Large Cap"), (nse_mid, "Mid Cap"), (nse_small, "Small Cap")]:
         if upl is not None and _save_default_upload(upl, NSE_DEFAULT_PATHS[cap]):
             st.caption(f"Saved as default -> {os.path.basename(NSE_DEFAULT_PATHS[cap])}")
-    for cap, p in NSE_DEFAULT_PATHS.items():
-        if os.path.exists(p):
-            st.caption(f"Using saved {cap}: {os.path.basename(p)}")
+    _saved_nse = [cap for cap, p in NSE_DEFAULT_PATHS.items() if os.path.exists(p)]
+    for cap in _saved_nse:
+        st.caption(f"Using saved {cap}: {os.path.basename(NSE_DEFAULT_PATHS[cap])}")
+    if _saved_nse:
+        st.caption("These saved files OVERRIDE the built-in universe.csv. Clear "
+                   "them to go back to the full universe.csv list.")
+        if st.button("Clear saved NSE files (use universe.csv)", key="clear_nse"):
+            for cap in list(NSE_DEFAULT_PATHS):
+                try:
+                    if os.path.exists(NSE_DEFAULT_PATHS[cap]):
+                        os.remove(NSE_DEFAULT_PATHS[cap])
+                except Exception:
+                    pass
+            st.success("Cleared. The next scan uses the full universe.csv. "
+                       "Re-run the scan.")
+            st.rerun()
 
 
 def _nse_slot(uploaded, cap):
@@ -425,6 +438,7 @@ if scanner._is_nse_market_hours_ist():
                            "understated because today's bar is partial.")
 # --- Fundamentals (v2 Phase 2): bulk CSV keyed by symbol -----------------------
 FUND_YF_CACHE = os.path.join(DATA_DIR, "fundamentals_yf_cache.pkl")
+FUND_YF_CSV = os.path.join(DATA_DIR, "fundamentals_yahoo.csv")
 with st.sidebar.expander("Fundamentals (optional)"):
     st.caption("Two ways to feed the Value scan:")
     st.markdown("**A. Auto from Yahoo (free, cloud-safe)**")
@@ -448,7 +462,20 @@ with st.sidebar.expander("Fundamentals (optional)"):
                     syms, cache_path=FUND_YF_CACHE, progress=_fp)
             pbar.empty(); ptxt.empty()
             st.session_state["fund_yf"] = got
-            st.success(f"Yahoo fundamentals ready for {len(got)} stocks.")
+            # Persist EVERYTHING fetched so far (cache accumulates) into a CSV
+            # the user can download and re-upload after a reboot.
+            full = fundamentals.load_yf_cache(FUND_YF_CACHE)
+            n = fundamentals.write_fundamentals_csv(full, FUND_YF_CSV)
+            st.success(f"Yahoo fundamentals ready for {len(got)} stocks "
+                       f"(saved file now holds {n} total).")
+    # Download the accumulated Yahoo fundamentals CSV (survives reboot via re-upload)
+    if os.path.exists(FUND_YF_CSV):
+        with open(FUND_YF_CSV, "rb") as _fh:
+            st.download_button("Download Yahoo fundamentals CSV", _fh.read(),
+                               file_name="fundamentals_yahoo.csv", mime="text/csv",
+                               key="dl_yf_csv",
+                               help="Save this. After a reboot, upload it under "
+                                    "option B to skip re-fetching.")
     st.markdown("**B. Upload Screener CSV (most complete)**")
     st.caption("Bulk CSV keyed by `symbol` (ROCE, ROE, Profit/Sales Growth, "
                "Debt to Equity, Promoter Holding, Pledge, P/E, PEG). Headers "

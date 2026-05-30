@@ -168,6 +168,11 @@ def load_fundamentals(path: str) -> dict:
         return {}
     field_col = {}
     for canon, aliases in _FUND_ALIASES.items():
+        # Accept the canonical key itself as a header (so CSVs we WRITE round-trip),
+        # then any of the human-friendly aliases.
+        if _norm_key(canon) in norm_cols:
+            field_col[canon] = norm_cols[_norm_key(canon)]
+            continue
         for a in aliases:
             if _norm_key(a) in norm_cols:
                 field_col[canon] = norm_cols[_norm_key(a)]
@@ -437,6 +442,42 @@ def fetch_one_yf(symbol: str, deep: bool = True) -> dict:
         except Exception:
             pass
     return rec
+
+
+_CSV_FIELD_ORDER = [
+    "rev_cagr_3y", "rev_cagr_5y", "pat_cagr_3y", "pat_cagr_5y", "roce_ttm",
+    "roce_5y_avg", "roe_ttm", "roe_5y_avg", "opm_ttm", "opm_trend",
+    "debt_to_equity", "interest_coverage", "ocf_3y", "ocf_to_pat",
+    "promoter_holding", "promoter_change_3y", "pledge", "pe_ttm", "pb", "peg",
+    "pe_5y_median", "div_yield", "sales_5y", "mcap", "isin", "sector",
+]
+
+
+def dict_to_df(fund: dict):
+    """Convert {SYMBOL: {field: value}} into a tidy DataFrame keyed by `symbol`,
+    using the canonical column names (which load_fundamentals now reads back)."""
+    if not _PD_OK or not fund:
+        return None
+    rows = []
+    for sym, rec in sorted(fund.items()):
+        row = {"symbol": sym}
+        for f in _CSV_FIELD_ORDER:
+            if f in rec:
+                row[f] = rec[f]
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def write_fundamentals_csv(fund: dict, csv_path: str) -> int:
+    """Write/merge the fundamentals dict to a CSV. Returns the row count."""
+    df = dict_to_df(fund)
+    if df is None or df.empty:
+        return 0
+    try:
+        df.to_csv(csv_path, index=False)
+    except Exception:
+        return 0
+    return len(df)
 
 
 def load_yf_cache(cache_path: str) -> dict:
