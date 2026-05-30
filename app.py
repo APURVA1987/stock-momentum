@@ -1665,9 +1665,18 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         st.caption("Fundamentals FIRST: targets businesses that can compound at "
                    "~15-20% for 3-5 years. Needs a fundamentals CSV (sidebar).")
         if vq is None or vq.empty:
-            st.info("No fundamentals loaded, or no rows scored. Upload a "
-                    "`fundamentals.csv` in the sidebar (Fundamentals CSV) and re-run "
-                    "the scan. Without it, this tab stays empty by design.")
+            # If fundamentals ARE loaded now but the last scan has none attached,
+            # the scan simply predates the fundamentals - tell the user to re-run.
+            if fundamentals_data:
+                st.warning(f"Fundamentals are loaded for {len(fundamentals_data)} "
+                           "stocks, but the LAST SCAN ran before they were available. "
+                           "Click **Run Scan** again (sidebar) - fundamentals only "
+                           "attach during a scan. This tab will then populate.")
+            else:
+                st.info("No fundamentals loaded. In the sidebar, either tick **Use "
+                        "Yahoo auto-fundamentals** and click **Fetch**, or upload a "
+                        "`fundamentals.csv`, then **Run Scan**. Empty by design "
+                        "without fundamentals.")
         else:
             def _vqn(cls):
                 return int((vq["Value Class"] == cls).sum())
