@@ -461,6 +461,37 @@ Prompts shown:
 
 ---
 
+## 14b. Dashboard UI Flow Improvements
+
+A layout pass converted table-heavy tabs into graphical-first dashboards:
+
+- **Sector selector behaviour**: the Sector Rotation tab now has a
+  `Select sector to view stocks` dropdown at the TOP, wrapped in `@_fragment`
+  and keyed in `st.session_state['sector_pick']`. Changing the sector re-runs
+  ONLY that fragment - it no longer scrolls to the top, jumps tabs, or loses
+  scan results. Missing sectors are filled as `Unknown`.
+- **Graphical summaries before tables**: every redesigned tab follows the
+  order *summary cards -> main chart -> secondary chart -> stock cards ->
+  compact table -> detailed table (expander)*.
+- **Sector Rotation Dashboard**: header + subtitle, 8 selected-sector summary
+  cards (Rank, Strength, 20D return, RS, %>50DMA, %>200DMA, Strong, Wait),
+  highlighted sector-strength bar, breadth bar, classification donut, top-10
+  bar, momentum scatter, then the detailed table at the bottom.
+- **Summary vs detailed table views**: the reusable `summary_table()` helper
+  renders a compact <=11-column table first (`SUMMARY_COLS`) and tucks the
+  full wide table inside a `Show detailed full table` expander - this removes
+  the heavy horizontal scrolling.
+- **Table filters**: `summary_table()` shows search (symbol/company),
+  classification filter, sort-by, and row-count (10/20/50/All) controls ABOVE
+  the table; all keyed in `st.session_state` so they survive reruns and never
+  trigger a re-scan.
+- **Table headers**: every table now has `st.subheader` + `st.caption` ABOVE
+  it (never below). `st.divider()` separates sections.
+- **Applied to**: Sector Rotation, Strong Breakout, Wait for Confirmation,
+  RS Leaders (more tabs can adopt `summary_table()` the same way).
+
+---
+
 ## 15. Development Rules for Future AI Agents
 
 These rules are not optional. Read them before editing.

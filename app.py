@@ -166,6 +166,71 @@ def df_with_links(df: pd.DataFrame, cols, height=420):
     st.dataframe(d[show], use_container_width=False, height=height, column_config=SCREENER_COLCFG)
 
 
+# Compact summary columns shown in the "first" table everywhere (<= 11 cols so
+# there is little/no horizontal scrolling). The full wide table goes in an
+# expander underneath.
+SUMMARY_COLS = ["Symbol", "Company", "CMP", "Classification", "Composite Score",
+                "RS Score", "RSI 14", "Volume Ratio", "Trigger Price",
+                "Risk Level", "Final Remark"]
+
+
+def summary_table(df, key, title, caption="", detail_cols=None,
+                  default_sort="Composite Score"):
+    """Graphical-dashboard table block used by the table-heavy tabs:
+
+      - heading + caption ABOVE the table (never below)
+      - filter controls (search, classification, row count) ABOVE the table
+      - a COMPACT <=11-column table with a clickable Screener link
+      - the full wide table inside an expander at the very bottom
+
+    Filters live in st.session_state (keyed) so they survive reruns and never
+    trigger a re-scan. Returns nothing - it renders in place.
+    """
+    st.subheader(title)
+    if caption:
+        st.caption(caption)
+    if df is None or df.empty:
+        st.info("No rows to show.")
+        return
+
+    d = df.copy()
+    if "Sector" in d.columns:
+        d["Sector"] = d["Sector"].fillna("Unknown").replace("", "Unknown")
+
+    # --- Filter controls (above the table) ---
+    fc = st.columns([2, 2, 1.2, 1.2])
+    q = fc[0].text_input("Search symbol / company", key=f"{key}_q").strip().lower()
+    classes = (["All"] + sorted(d["Classification"].dropna().unique().tolist())
+               if "Classification" in d.columns else ["All"])
+    pick_cls = fc[1].selectbox("Classification", classes, key=f"{key}_cls")
+    sort_opts = [c for c in [default_sort, "RS Score", "Volume Ratio",
+                             "Distance from 52W High %", "Score"] if c in d.columns]
+    sort_by = fc[2].selectbox("Sort by", sort_opts or ["Symbol"], key=f"{key}_sort")
+    n_choice = fc[3].selectbox("Rows", ["10", "20", "50", "All"], index=1, key=f"{key}_n")
+
+    if q:
+        mask = d["Symbol"].astype(str).str.lower().str.contains(q)
+        if "Company" in d.columns:
+            mask = mask | d["Company"].astype(str).str.lower().str.contains(q)
+        d = d[mask]
+    if pick_cls != "All" and "Classification" in d.columns:
+        d = d[d["Classification"] == pick_cls]
+    if sort_by in d.columns:
+        asc = sort_by == "Distance from 52W High %"
+        d = d.sort_values(sort_by, ascending=asc)
+    if n_choice != "All":
+        d = d.head(int(n_choice))
+
+    st.caption(f"Showing {len(d)} of {len(df)} stocks.")
+    # Compact table first
+    compact = [c for c in SUMMARY_COLS if c in d.columns]
+    df_with_links(d, compact, height=min(460, 80 + 36 * min(len(d), 12)))
+    # Full wide table in an expander
+    full = detail_cols or list(df.columns)
+    with st.expander("Show detailed full table"):
+        df_with_links(d, [c for c in full if c in d.columns], height=480)
+
+
 def parse_nse_constituent(file, cap_label: str) -> pd.DataFrame:
     """Parse an NSE / niftyindices.com constituent CSV (e.g. ind_nifty100list.csv)
     into our 4-column universe schema. The file's typical columns are:
@@ -965,13 +1030,26 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     # 2) STRONG BREAKOUT
     # =====================================================================
     with T["Strong Breakout"]:
-        st.subheader("Strong Breakout / Actionable")
+        st.markdown("## Strong Breakout / Actionable")
+        st.caption("Highest-conviction momentum candidates. Always confirm chart, "
+                   "news and liquidity before entry.")
         if strong.empty:
             st.info("No strong breakout stocks with current settings.")
         else:
-            # A. Top 5 cards
-            # Show ALL strong-breakout names as cards (these are the most
-            # actionable list - we never want to hide any qualified candidates).
+            # A. Summary cards
+            sc = st.columns(5)
+            metric_card(sc[0], "Strong Breakouts", len(strong),
+                        CLASS_COLORS["Strong Breakout / Actionable"])
+            metric_card(sc[1], "Avg Score", f"{strong['Score'].mean():.0f}", "#37474f")
+            metric_card(sc[2], "Avg Vol Ratio", f"{strong['Volume Ratio'].mean():.2f}", "#37474f")
+            top_sec = (strong["Sector"].mode().iloc[0]
+                       if not strong["Sector"].dropna().empty else "-")
+            metric_card(sc[3], "Top sector", top_sec, "#1f4e79")
+            avg_rs = strong["RS Score"].mean() if "RS Score" in strong else float("nan")
+            metric_card(sc[4], "Avg RS Score",
+                        f"{avg_rs:.0f}" if pd.notna(avg_rs) else "-", "#1e7d32")
+            st.write("")
+            # B. Cards for every strong breakout (actionable list - none hidden)
             stock_cards(strong, len(strong), CLASS_COLORS["Strong Breakout / Actionable"], [
                 ("Score", "Score"), ("CMP", "CMP"), ("Breakout", "Breakout Status"),
                 ("RSI", "RSI 14"), ("Vol Ratio", "Volume Ratio"), ("Risk", "Risk Level"),
@@ -979,13 +1057,11 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                 ("T1", "Target 1"), ("T2", "Target 2")])
             st.write("")
             g = st.columns(2)
-            # B. Ranking bar
             g[0].plotly_chart(px.bar(strong.sort_values("Score").tail(20), x="Score", y="Symbol",
                                      orientation="h", title="Strong Breakout ranking",
                                      hover_data=["RSI 14", "Volume Ratio", "Relative Strength %"],
                                      color="Score", color_continuous_scale="Greens"),
                               use_container_width=True)
-            # C. Risk-reward scatter
             sd = strong.copy()
             sd["Risk %"] = ((sd["CMP"] - sd["Invalidation Level"]) / sd["CMP"] * 100).round(2)
             g[1].plotly_chart(px.scatter(sd, x="Risk %", y="Risk Reward", size="Volume Ratio",
@@ -993,9 +1069,10 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                                          hover_name="Symbol", title="Risk vs Reward (bubble = volume)",
                                          size_max=30),
                               use_container_width=True)
-            # D. Detailed table - full list, always open by default.
-            st.subheader(f"All Strong Breakout stocks ({len(strong)})")
-            df_with_links(strong, list(strong.columns), height=520)
+            st.divider()
+            summary_table(strong, key="strong_tbl", title="All Strong Breakout stocks",
+                          caption="Compact view first; open the expander for every column.",
+                          detail_cols=list(strong.columns))
 
     # =====================================================================
     # 3) WAIT FOR CONFIRMATION
@@ -1008,9 +1085,19 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         else:
             wd = wait.copy()
             wd["Distance to Trigger %"] = ((wd["Trigger Price"] / wd["CMP"] - 1) * 100).round(2)
-            # B. Cards (top 10, two rows of five)
-            # Top 20 cards (cards wrap 5-per-row -> 4 rows max) so the user
-            # always sees a meaningful slice; full table is below.
+            # A. Summary cards
+            wc = st.columns(5)
+            metric_card(wc[0], "Waitlist stocks", len(wd), CLASS_COLORS["Wait for Confirmation"])
+            nearest = wd.sort_values("Distance to Trigger %").iloc[0]
+            metric_card(wc[1], "Closest to trigger", nearest["Symbol"], "#1e7d32",
+                        sub=f"{nearest['Distance to Trigger %']}% away")
+            metric_card(wc[2], "Highest score", f"{wd['Score'].max():.0f}", "#37474f")
+            metric_card(wc[3], "Highest RS Score",
+                        f"{wd['RS Score'].max():.0f}" if 'RS Score' in wd else "-", "#37474f")
+            vol_only = int(wd["Confirmation Needed"].str.contains("volume", case=False, na=False).sum())
+            metric_card(wc[4], "Need volume only", vol_only, "#e08e0b")
+            st.write("")
+            # B. Cards (top 20, wraps 5 per row)
             stock_cards(wd, min(20, len(wd)), CLASS_COLORS["Wait for Confirmation"], [
                 ("CMP", "CMP"), ("Score", "Score"), ("Trigger", "Trigger Price"),
                 ("Alert", "Suggested Alert Price"), ("To Trigger %", "Distance to Trigger %"),
@@ -1032,14 +1119,17 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
             gg[1].plotly_chart(px.bar(cdf, x="Count", y="Confirmation", orientation="h",
                                       title="What are they waiting for?",
                                       color_discrete_sequence=["#e08e0b"]), use_container_width=True)
-            # E. Alert watchlist table
+            st.divider()
+            # E. Alert watchlist table (compact first, full in expander)
             alert_cols = ["Symbol", "Company", "CMP", "Trigger Price", "Suggested Alert Price",
                           "Distance to Trigger %", "Confirmation Needed", "Invalidation Level",
-                          "Score", "Risk Level"]
+                          "Score", "Composite Score", "RS Score", "Risk Level"]
             tbl = wd.sort_values(["Distance to Trigger %", "Score", "Relative Strength %"],
                                  ascending=[True, False, False])
-            st.subheader(f"All Wait-for-Confirmation stocks ({len(tbl)})")
-            df_with_links(tbl, alert_cols, height=520)
+            summary_table(tbl, key="wait_tbl", title="Alert watchlist",
+                          caption="Sorted by distance to trigger. Set alerts near the "
+                                  "trigger price; do not enter until it confirms.",
+                          detail_cols=alert_cols, default_sort="Score")
 
     # =====================================================================
     # 4) EARLY WATCHLIST
@@ -1066,43 +1156,113 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
     # SECTOR ROTATION (percentile-ranked sector strength engine)
     # =====================================================================
     with T["Sector Rotation"]:
+        st.markdown("## Sector Rotation Dashboard")
+        st.caption("Identify which sectors are leading and which stocks inside "
+                   "those sectors are showing momentum.")
         if sector_rot is None or sector_rot.empty:
-            st.info("No sector data available.")
+            st.info("No sector data available. Run a scan first.")
         else:
-            # A. Top sector cards
-            st.subheader("Leading sectors")
-            tcols = st.columns(3)
-            for i, (_, s) in enumerate(sector_rot.head(3).iterrows()):
-                metric_card(tcols[i], f"{s['Sector']} ({s['Sector Status']})",
-                            f"{s['Sector Strength Score']:.0f}/100", "#1f4e79",
-                            sub=f"20D {s['Avg_Return_20D']}% | {int(s['Strong'])} strong / "
-                                f"{int(s['Wait'])} wait / {int(s['RS_Leaders'])} RS")
-            # B. Sector strength bar chart
-            st.plotly_chart(px.bar(sector_rot.sort_values("Sector Strength Score"),
-                                   x="Sector Strength Score", y="Sector", orientation="h",
-                                   title="Sector strength score (0-100)", color="Sector Strength Score",
-                                   color_continuous_scale="RdYlGn"), use_container_width=True)
-            # C. Sector heatmap (no matplotlib dependency)
-            metrics = ["Sector Strength Score", "Avg_Return_20D", "Avg_Return_60D",
-                       "Avg_RS_Score", "Pct_Above_50DMA", "Strong", "Wait"]
-            hm = sector_rot.set_index("Sector")[metrics]
-            znorm = (hm - hm.min()) / (hm.max() - hm.min() + 1e-9)
-            heat = go.Figure(go.Heatmap(z=znorm.values, x=metrics, y=hm.index.tolist(),
-                                        text=hm.values, texttemplate="%{text}",
-                                        colorscale="RdYlGn", showscale=False))
-            heat.update_layout(height=max(320, 26 * len(hm)), margin=dict(t=20, b=10))
-            st.plotly_chart(heat, use_container_width=True)
-            # D. Full sector table
-            with st.expander("Full sector table"):
-                st.dataframe(sector_rot, use_container_width=False, height=360)
-            # E. Sector drill-down
-            if not allstocks.empty:
-                sec_pick = st.selectbox("Show stocks in sector", list(sector_rot["Sector"]))
-                st.dataframe(allstocks[allstocks["Sector"] == sec_pick][
-                    ["Symbol", "Company", "Classification", "Composite Score", "RS Score",
-                     "RSI 14", "Volume Ratio", "Relative Strength %", "Breakout Status"]]
-                    .sort_values("Composite Score", ascending=False),
-                    use_container_width=True, height=320)
+            @_fragment
+            def _sector_rotation():
+                sr = sector_rot.copy()
+                # Selector at the TOP - preserved in session_state so changing it
+                # only re-runs THIS fragment, never the whole scan.
+                sectors = list(sr["Sector"])
+                sel = st.selectbox("Select sector to view stocks", sectors,
+                                   key="sector_pick")
+                row = sr[sr["Sector"] == sel].iloc[0]
+
+                # --- B. Selected-sector summary cards (8 metrics, 2 rows) ---
+                st.markdown(f"### {sel}  -  {row['Sector Status']}")
+                a = st.columns(4)
+                metric_card(a[0], "Sector Rank", f"#{int(row['Sector Rank'])}", "#1f4e79")
+                metric_card(a[1], "Strength Score", f"{row['Sector Strength Score']:.0f}/100",
+                            "#1e7d32" if row["Sector Strength Score"] >= 60 else "#e08e0b")
+                metric_card(a[2], "Avg 20D Return %", f"{row['Avg_Return_20D']}", "#37474f")
+                metric_card(a[3], "Avg RS Score", f"{row['Avg_RS_Score']:.0f}", "#37474f")
+                b = st.columns(4)
+                metric_card(b[0], "% Above 50 DMA", f"{row['Pct_Above_50DMA']:.0f}%", "#1f4e79")
+                metric_card(b[1], "% Above 200 DMA", f"{row['Pct_Above_200DMA']:.0f}%", "#1f4e79")
+                metric_card(b[2], "Strong Breakouts", int(row["Strong"]),
+                            CLASS_COLORS["Strong Breakout / Actionable"])
+                metric_card(b[3], "Wait for Confirmation", int(row["Wait"]),
+                            CLASS_COLORS["Wait for Confirmation"])
+                st.divider()
+
+                # --- C. Charts first ---
+                g1 = st.columns(2)
+                # 1. Sector strength bar, selected sector highlighted
+                srs = sr.sort_values("Sector Strength Score")
+                bar_colors = ["#1e7d32" if s == sel else "#9fb6c4" for s in srs["Sector"]]
+                fig_str = go.Figure(go.Bar(
+                    x=srs["Sector Strength Score"], y=srs["Sector"], orientation="h",
+                    marker_color=bar_colors))
+                fig_str.update_layout(title="Sector strength (selected highlighted)",
+                                      height=max(320, 20 * len(srs)), margin=dict(t=40, b=10))
+                g1[0].plotly_chart(fig_str, use_container_width=True)
+                # 2. Breadth for selected sector
+                breadth = pd.DataFrame({
+                    "Breadth": ["% Above 50 DMA", "% Above 200 DMA"],
+                    "Pct": [row["Pct_Above_50DMA"], row["Pct_Above_200DMA"]]})
+                g1[1].plotly_chart(px.bar(breadth, x="Pct", y="Breadth", orientation="h",
+                                          range_x=[0, 100], title=f"{sel} breadth",
+                                          color="Breadth",
+                                          color_discrete_sequence=["#1e7d32", "#1f4e79"]),
+                                   use_container_width=True)
+
+                # Stocks in the selected sector (handle missing sector safely)
+                stk = allstocks.copy() if not allstocks.empty else pd.DataFrame()
+                if not stk.empty:
+                    stk["Sector"] = stk["Sector"].fillna("Unknown").replace("", "Unknown")
+                    stk = stk[stk["Sector"] == sel]
+
+                if stk.empty:
+                    st.info("No scanned stocks in this sector.")
+                    return
+
+                g2 = st.columns(2)
+                # 3. Classification donut for selected sector
+                cc = stk["Classification"].value_counts().reset_index()
+                cc.columns = ["Classification", "Count"]
+                g2[0].plotly_chart(px.pie(cc, names="Classification", values="Count",
+                                          hole=0.5, title=f"{sel} - classification split",
+                                          color="Classification",
+                                          color_discrete_map=CLASS_COLORS),
+                                   use_container_width=True)
+                # 4. Top-10 stocks by composite score
+                top10 = stk.sort_values("Composite Score", ascending=False).head(10)
+                g2[1].plotly_chart(px.bar(top10.sort_values("Composite Score"),
+                                          x="Composite Score", y="Symbol", orientation="h",
+                                          title=f"Top {len(top10)} in {sel} by score",
+                                          color="Classification", color_discrete_map=CLASS_COLORS),
+                                   use_container_width=True)
+
+                # 5. Momentum scatter
+                sc = stk.copy()
+                sc["Volume Ratio"] = pd.to_numeric(sc["Volume Ratio"], errors="coerce").fillna(1).clip(lower=0.1)
+                st.plotly_chart(px.scatter(
+                    sc, x="Relative Strength %", y="Composite Score", size="Volume Ratio",
+                    color="Classification", color_discrete_map=CLASS_COLORS, hover_name="Symbol",
+                    hover_data=["Company", "CMP", "RSI 14", "Trigger Price"],
+                    title=f"{sel} - momentum map (bubble = volume)", size_max=26),
+                    use_container_width=True)
+                st.divider()
+
+                # --- D. Detailed table at the BOTTOM (header above) ---
+                det = ["Symbol", "Company", "CMP", "Classification", "Composite Score",
+                       "RS Score", "Sector Strength Score", "RSI 14", "Volume Ratio",
+                       "Distance from 52W High %", "Breakout Status", "Trigger Price",
+                       "Confirmation Needed", "Risk Level", "Final Remark"]
+                ordered = stk.sort_values(
+                    ["Composite Score", "RS Score", "Distance from 52W High %"],
+                    ascending=[False, False, True])
+                summary_table(ordered, key="sector_stocks",
+                              title=f"Stocks in {sel}",
+                              caption="Sorted by momentum score. Use the filters to "
+                                      "search or narrow by classification.",
+                              detail_cols=det)
+
+            _sector_rotation()
 
     # =====================================================================
     # RS LEADERS (multi-timeframe relative strength)
@@ -1115,16 +1275,31 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         if allstocks.empty:
             st.info("Run a scan to view RS leaders.")
         else:
-            rs = allstocks.sort_values("RS Score", ascending=False).head(20).copy()
+            rs_all = allstocks.sort_values("RS Score", ascending=False).copy()
+            leaders = rs_all[rs_all.get("RS Leader") == "Yes"] if "RS Leader" in rs_all else pd.DataFrame()
+            # A. Summary cards
+            cc = st.columns(4)
+            metric_card(cc[0], "RS Leaders", len(leaders), "#1e7d32")
+            metric_card(cc[1], "Avg RS Score", f"{rs_all['RS Score'].mean():.0f}", "#37474f")
+            top_sec = (rs_all.head(20)["Sector"].mode().iloc[0]
+                       if not rs_all.head(20)["Sector"].dropna().empty else "-")
+            metric_card(cc[2], "Top sector (top 20)", top_sec, "#1f4e79")
+            metric_card(cc[3], "Highest RS Score", f"{rs_all['RS Score'].max():.0f}", "#1e7d32")
+            st.write("")
+            rs = rs_all.head(20)
             st.plotly_chart(px.bar(rs.sort_values("RS Score"), x="RS Score", y="Symbol",
                                    orientation="h", title="Top 20 by RS Score",
                                    color="RS Score", color_continuous_scale="Viridis",
                                    hover_data=["Sector", "RS 20D %", "RS 60D %", "RS 120D %"]),
                             use_container_width=True)
+            st.divider()
             rs_cols = ["Symbol", "Company", "Sector", "Classification", "RS Leader", "RS Score",
                        "RS 5D %", "RS 20D %", "RS 60D %", "RS 120D %", "RS 252D %", "CMP",
                        "Distance from 52W High %", "Composite Score"]
-            df_with_links(rs, rs_cols, height=460)
+            summary_table(rs_all, key="rs_leaders", title="Relative Strength ranking",
+                          caption="All scanned stocks ranked by RS Score. "
+                                  "Filter by classification or search a symbol.",
+                          detail_cols=rs_cols, default_sort="RS Score")
 
     # =====================================================================
     # DO NOT CHASE (strong but overextended - bad fresh entry)
