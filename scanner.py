@@ -29,6 +29,7 @@ import yfinance as yf
 
 import indicators as ind
 import value as V
+import fundamentals as F
 
 # Folder for the optional LOCAL price cache (used only in "local mode").
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -1314,8 +1315,15 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
              retest_window: int = 60, retest_tol: float = 7.0,
              min_rsi: float = 55.0, min_vol_ratio: float = 1.5,
              min_score: int = 55, local_mode: bool = False,
-             eod_only: bool = True, progress_callback=None) -> dict:
-    """Scan the whole universe and return categorised result tables."""
+             eod_only: bool = True, fundamentals=None,
+             momentum_quality_gate: bool = False, progress_callback=None) -> dict:
+    """Scan the whole universe and return categorised result tables.
+
+    `fundamentals` (optional): {SYMBOL: {field: value}} from
+    fundamentals.load_fundamentals(). When provided, each row gets the four
+    fundamental sub-scores + a `Fundamentals Quality Gate` flag. With
+    `momentum_quality_gate=True` (Section 5A), a Strong Breakout in a low-quality
+    business (Quality Score < 40) is demoted to Wait for Confirmation."""
     ctx = get_nifty_context(period=period)
     nifty_20d = ctx["nifty_20d_return"]
     regime = ctx["regime"]
@@ -1497,6 +1505,28 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
         rowd["Momentum Readiness"] = round(
             0.5 * composite + 0.3 * _f(rowd.get("Spring Score"))
             + 0.2 * _f(rowd.get("Accumulation Score")), 1)
+
+        # --- v2 Phase 2: attach fundamentals sub-scores (if provided) ---
+        if fundamentals:
+            fdata = fundamentals.get(s["symbol"])
+            if fdata:
+                fsc = F.score_fundamentals(fdata, s["sector"])
+                rowd.update(fsc)
+                rowd["Fundamentals Quality Gate"] = (
+                    "Pass" if F.fundamentals_quality_gate(fsc, fdata) else "Fail")
+                rowd["Fundamentals"] = "Loaded"
+                # Section 5A optional momentum gate: demote junk-quality breakouts.
+                if (momentum_quality_gate
+                        and classification == "Strong Breakout / Actionable"
+                        and _f(fsc.get("Quality Score"), 100) < 40):
+                    classification = "Wait for Confirmation"
+                    rowd["Classification"] = classification
+                    rowd["Final Remark"] = (str(rowd.get("Final Remark", ""))
+                                            + " | demoted: weak fundamentals")
+            else:
+                rowd["Fundamentals"] = "Missing"
+                rowd["Fundamentals Quality Gate"] = "No Data"
+
         all_rows.append(rowd)
         if is_coiled:
             coiled_rows.append(rowd)

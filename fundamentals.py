@@ -12,6 +12,9 @@
 # - This needs the `requests` and `beautifulsoup4` packages (see requirements.txt).
 # -----------------------------------------------------------------------------
 
+import os
+import math
+
 try:
     import requests
     from bs4 import BeautifulSoup
@@ -66,3 +69,280 @@ def get_fundamentals(symbol: str, timeout: int = 12) -> dict | None:
         except Exception:
             continue
     return None
+
+
+# =============================================================================
+# v2 PHASE 2 - FUNDAMENTALS LAYER (Sections 30-32)
+# =============================================================================
+# Loads a maintained bulk CSV (default data/fundamentals.csv) keyed by symbol,
+# computes four transparent sub-scores (Quality / Growth / Balance-Sheet /
+# Promoter) and a hard Compounder quality gate. Pure data + math: this module
+# imports NOTHING from scanner.py or value.py (rule Section 46).
+# -----------------------------------------------------------------------------
+try:
+    import pandas as pd
+    _PD_OK = True
+except Exception:
+    _PD_OK = False
+
+FINANCIAL_SECTORS = {"banking", "nbfc", "finance", "insurance",
+                     "capital markets", "amc"}
+
+# Canonical field -> accepted CSV header variants (case/space/punctuation-insensitive).
+_FUND_ALIASES = {
+    "rev_cagr_3y":        ["sales growth 3years", "sales growth 3y", "rev cagr 3y",
+                           "revenue cagr 3y", "sales cagr 3y"],
+    "rev_cagr_5y":        ["sales growth 5years", "sales growth 5y", "rev cagr 5y",
+                           "revenue cagr 5y", "sales cagr 5y"],
+    "pat_cagr_3y":        ["profit growth 3years", "profit growth 3y", "pat cagr 3y",
+                           "profit cagr 3y", "net profit growth 3y"],
+    "pat_cagr_5y":        ["profit growth 5years", "profit growth 5y", "pat cagr 5y",
+                           "profit cagr 5y"],
+    "roce_ttm":           ["roce", "roce %", "return on capital employed"],
+    "roce_5y_avg":        ["roce 5y avg", "roce 5years", "average roce 5y", "roce 5yr"],
+    "roe_ttm":            ["roe", "roe %", "return on equity"],
+    "roe_5y_avg":         ["roe 5y avg", "roe 5years", "average roe 5y", "roe 5yr"],
+    "opm_ttm":            ["opm", "opm %", "operating margin", "operating profit margin"],
+    "opm_trend":          ["opm trend", "margin trend"],
+    "debt_to_equity":     ["debt to equity", "debt / equity", "d/e", "de ratio"],
+    "interest_coverage":  ["interest coverage", "interest coverage ratio"],
+    "ocf_3y":             ["cash from operations 3y", "ocf 3y", "operating cash flow 3y",
+                           "cfo 3y"],
+    "ocf_to_pat":         ["ocf to pat", "ocf/pat", "cfo to pat", "cash conversion"],
+    "promoter_holding":   ["promoter holding", "promoters holding", "promoter %"],
+    "promoter_change_3y": ["promoter change 3y", "change in promoter holding 3y",
+                           "promoter holding change 3y"],
+    "pledge":             ["pledge", "pledged", "promoter pledge", "pledged %"],
+    "pe_ttm":             ["pe", "p/e", "stock p/e", "price to earning"],
+    "pb":                 ["pb", "p/b", "price to book", "price to book value"],
+    "peg":                ["peg", "peg ratio"],
+    "sales_5y":           ["sales", "revenue", "sales ttm"],
+    "mcap":               ["market cap", "market capitalization", "mcap"],
+    "div_yield":          ["dividend yield", "div yield", "yield"],
+    "pe_5y_median":       ["pe 5y median", "median pe 5y", "5y median pe"],
+    "isin":               ["isin", "isin code"],
+    "sector":             ["sector", "industry"],
+}
+
+
+def _norm_key(s) -> str:
+    out = []
+    for ch in str(s).strip().lower():
+        out.append(ch if ch.isalnum() or ch == " " else " ")
+    return " ".join("".join(out).split())
+
+
+def _to_num(v):
+    """Coerce '18.2 %', '1,234', '₹45 Cr' -> float; blank/dash -> NaN."""
+    if v is None:
+        return float("nan")
+    s = str(v).strip().replace(",", "").replace("%", "").replace("₹", "")
+    s = s.replace("Cr", "").replace("cr", "").strip()
+    if s in ("", "-", "--", "na", "n/a", "nan"):
+        return float("nan")
+    try:
+        return float(s)
+    except ValueError:
+        return float("nan")
+
+
+def load_fundamentals(path: str) -> dict:
+    """Read a bulk fundamentals CSV keyed by symbol. Returns {SYMBOL: {field: val}}.
+    Tolerant of header naming (uses the alias table). Returns {} on any failure."""
+    if not _PD_OK or not path or not os.path.exists(path):
+        return {}
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return {}
+    if df.empty:
+        return {}
+    # Build header -> canonical map.
+    norm_cols = {_norm_key(c): c for c in df.columns}
+    sym_col = None
+    for cand in ("symbol", "nse symbol", "nse code", "ticker", "tradingsymbol"):
+        if cand in norm_cols:
+            sym_col = norm_cols[cand]
+            break
+    if sym_col is None:
+        return {}
+    field_col = {}
+    for canon, aliases in _FUND_ALIASES.items():
+        for a in aliases:
+            if _norm_key(a) in norm_cols:
+                field_col[canon] = norm_cols[_norm_key(a)]
+                break
+    out = {}
+    for _, row in df.iterrows():
+        sym = str(row[sym_col]).strip().upper()
+        if not sym or sym in ("NAN", ""):
+            continue
+        rec = {}
+        for canon, col in field_col.items():
+            if canon in ("opm_trend", "isin", "sector"):
+                rec[canon] = str(row[col]).strip()
+            else:
+                rec[canon] = _to_num(row[col])
+        out[sym] = rec
+    return out
+
+
+def _g(f, k, default=float("nan")):
+    v = f.get(k, default)
+    try:
+        return default if (v is None or (isinstance(v, float) and math.isnan(v))) else float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _opm_trend_label(f) -> str:
+    t = str(f.get("opm_trend", "")).strip().lower()
+    if t in ("expanding", "up", "rising", "improving"):
+        return "expanding"
+    if t in ("contracting", "down", "falling", "declining"):
+        return "contracting"
+    return "stable"
+
+
+def score_fundamentals(f: dict, sector: str = "") -> dict:
+    """Return the four sub-scores (0-100) + bookkeeping flags. Missing fields
+    award the neutral midpoint of their bucket and increment `partial`."""
+    if not f:
+        return {"Quality Score": float("nan"), "Growth Score": float("nan"),
+                "Balance-Sheet Score": float("nan"), "Promoter Score": float("nan"),
+                "Fundamentals Partial": 99, "BS Proxy": "No"}
+    partial = 0
+    is_fin = _norm_key(sector) in FINANCIAL_SECTORS
+
+    def have(*keys):
+        nonlocal partial
+        ok = all(not math.isnan(_g(f, k)) for k in keys)
+        if not ok:
+            partial += 1
+        return ok
+
+    # ---- Quality Score (Section 31) ----
+    q = 0
+    roce = _g(f, "roce_ttm")
+    if have("roce_ttm"):
+        q += 25 if roce >= 20 else 18 if roce >= 15 else 10 if roce >= 12 else 0
+    else:
+        q += 12
+    r5 = _g(f, "roce_5y_avg")
+    if have("roce_5y_avg"):
+        q += 15 if r5 >= 15 else 9 if r5 >= 12 else 0
+    else:
+        q += 7
+    roe = _g(f, "roe_ttm")
+    if have("roe_ttm"):
+        q += 15 if roe >= 18 else 10 if roe >= 14 else 5 if roe >= 10 else 0
+    else:
+        q += 7
+    ocf_pat = _g(f, "ocf_to_pat")
+    if have("ocf_to_pat"):
+        q += 15 if ocf_pat >= 0.8 else 9 if ocf_pat >= 0.6 else 4 if ocf_pat >= 0.4 else 0
+    else:
+        q += 7
+    trend = _opm_trend_label(f)
+    q += 15 if trend == "expanding" else 9 if trend == "stable" else 0
+    ic = _g(f, "interest_coverage")
+    if have("interest_coverage"):
+        q += 15 if ic >= 5 else 9 if ic >= 3 else 4 if ic >= 1.5 else 0
+    else:
+        q += 7
+    quality = min(100, q)
+
+    # ---- Growth Score ----
+    g = 0
+    p3 = _g(f, "pat_cagr_3y")
+    if have("pat_cagr_3y"):
+        g += 30 if p3 >= 20 else 22 if p3 >= 15 else 12 if p3 >= 10 else 5 if p3 >= 5 else 0
+    else:
+        g += 12
+    p5 = _g(f, "pat_cagr_5y")
+    if have("pat_cagr_5y"):
+        g += 20 if p5 >= 18 else 12 if p5 >= 12 else 6 if p5 >= 8 else 0
+    else:
+        g += 8
+    rv3 = _g(f, "rev_cagr_3y")
+    if have("rev_cagr_3y"):
+        g += 25 if rv3 >= 18 else 17 if rv3 >= 12 else 9 if rv3 >= 8 else 4 if rv3 >= 5 else 0
+    else:
+        g += 10
+    rv5 = _g(f, "rev_cagr_5y")
+    if have("rev_cagr_5y"):
+        g += 15 if rv5 >= 15 else 9 if rv5 >= 10 else 4 if rv5 >= 6 else 0
+    else:
+        g += 6
+    if not math.isnan(p3) and not math.isnan(rv3) and p3 >= rv3:
+        g += 10           # operating leverage / margin expansion
+    growth = min(100, g)
+
+    # ---- Balance-Sheet Score (financials exemption) ----
+    b = 0
+    bs_proxy = "No"
+    if is_fin:
+        bs_proxy = "Yes"
+        b += 20           # neutral midpoint for D/E bucket (structural)
+        partial += 0
+    else:
+        de = _g(f, "debt_to_equity")
+        if have("debt_to_equity"):
+            b += 40 if de <= 0.3 else 28 if de <= 0.6 else 15 if de <= 1.0 else 5 if de <= 1.5 else 0
+        else:
+            b += 20
+    ic2 = _g(f, "interest_coverage")
+    if not math.isnan(ic2):
+        b += 30 if ic2 >= 6 else 18 if ic2 >= 3 else 6 if ic2 >= 1.5 else 0
+    else:
+        b += 15
+    ocf = _g(f, "ocf_3y"); ocf_pat2 = _g(f, "ocf_to_pat")
+    if not math.isnan(ocf):
+        if ocf > 0 and (not math.isnan(ocf_pat2) and ocf_pat2 >= 0.6):
+            b += 30
+        elif ocf > 0:
+            b += 15
+    else:
+        b += 15
+    balance = min(100, b)
+
+    # ---- Promoter / Governance Score ----
+    p = 0
+    ph = _g(f, "promoter_holding")
+    if have("promoter_holding"):
+        p += 40 if ph >= 50 else 28 if ph >= 40 else 15 if ph >= 30 else 5
+    else:
+        p += 20
+    pc = _g(f, "promoter_change_3y")
+    if have("promoter_change_3y"):
+        p += 30 if pc >= 0 else 18 if pc >= -2 else 8 if pc >= -5 else 0
+    else:
+        p += 15
+    pl = _g(f, "pledge")
+    if have("pledge"):
+        p += 30 if pl == 0 else 18 if pl <= 10 else 8 if pl <= 25 else 0
+    else:
+        p += 15
+    promoter = min(100, p)
+
+    return {
+        "Quality Score": int(round(quality)),
+        "Growth Score": int(round(growth)),
+        "Balance-Sheet Score": int(round(balance)),
+        "Promoter Score": int(round(promoter)),
+        "Fundamentals Partial": int(partial),
+        "BS Proxy": bs_proxy,
+    }
+
+
+def fundamentals_quality_gate(scores: dict, f: dict) -> bool:
+    """Section 32: hard gate a stock must pass to be eligible for 'Compounder'."""
+    if not scores or scores.get("Fundamentals Partial", 99) > 2:
+        return False
+    pledge = _g(f, "pledge", 0)
+    pc = _g(f, "promoter_change_3y", 0)
+    return bool(
+        _g(scores, "Quality Score") >= 60 and _g(scores, "Growth Score") >= 55
+        and _g(scores, "Balance-Sheet Score") >= 55
+        and _g(scores, "Promoter Score") >= 50
+        and pledge <= 25 and pc >= -5)

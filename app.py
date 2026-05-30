@@ -28,6 +28,7 @@ OUTPUTS_DIR = os.path.join(BASE_DIR, "outputs")
 DEFAULT_UNIVERSE = os.path.join(BASE_DIR, "universe.csv")
 DATA_DIR = os.path.join(BASE_DIR, "data")
 HOLDINGS_PATH = os.path.join(DATA_DIR, "holdings_latest.xlsx")
+FUND_PATH = os.path.join(DATA_DIR, "fundamentals.csv")   # bulk fundamentals (v2 Phase 2)
 NSE_DEFAULT_PATHS = {                                     # Persistent NSE constituent files
     "Large Cap": os.path.join(DATA_DIR, "nse_large.csv"),
     "Mid Cap":   os.path.join(DATA_DIR, "nse_mid.csv"),
@@ -421,6 +422,28 @@ if scanner._is_nse_market_hours_ist():
     else:
         st.sidebar.warning("Market is OPEN. Volume/breakout signals will be "
                            "understated because today's bar is partial.")
+# --- Fundamentals (v2 Phase 2): bulk CSV keyed by symbol -----------------------
+with st.sidebar.expander("Fundamentals CSV (optional)"):
+    st.caption("Upload a bulk CSV keyed by `symbol` with columns like ROCE, ROE, "
+               "Profit Growth 3Y, Sales Growth 3Y, Debt to Equity, Promoter "
+               "Holding, Pledge, P/E, PEG. Headers are auto-matched. Saved as the "
+               "default for next time.")
+    ffile = st.file_uploader("Upload fundamentals.csv", type=["csv"], key="fund_csv")
+    if ffile is not None and _save_default_upload(ffile, FUND_PATH):
+        st.success("Saved as default -> fundamentals.csv")
+    if os.path.exists(FUND_PATH):
+        st.caption("Using saved fundamentals.csv")
+momentum_quality_gate = st.sidebar.checkbox(
+    "Momentum quality gate (demote weak-fundamental breakouts)", value=False,
+    help="Section 5A. When ON, a Strong Breakout in a business with Quality "
+         "Score < 40 is demoted to Wait for Confirmation. Needs a fundamentals "
+         "CSV. Default OFF preserves pure-technical behaviour.")
+# Load the bulk fundamentals once (cheap CSV read, no per-stock network call).
+fundamentals_data = (fundamentals.load_fundamentals(FUND_PATH)
+                     if os.path.exists(FUND_PATH) else {})
+if fundamentals_data:
+    st.sidebar.caption(f"Fundamentals loaded for {len(fundamentals_data)} symbols.")
+
 scan_focus = st.sidebar.selectbox(
     "Scan focus", ["All (Momentum + Value)", "Momentum only", "Value only"],
     index=0, help="Filters which tabs are shown to reduce on-screen clutter. "
@@ -467,6 +490,8 @@ if run_clicked:
         retest_tol=float(retest_tol), min_rsi=float(min_rsi),
         min_vol_ratio=float(min_vol_ratio), min_score=int(min_score),
         local_mode=bool(local_mode), eod_only=bool(eod_only),
+        fundamentals=fundamentals_data,
+        momentum_quality_gate=bool(momentum_quality_gate),
         progress_callback=on_progress,
     )
     progress.empty()
@@ -1803,7 +1828,25 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                          f"| Invalidation/SL: {r['Invalidation Level']}")
                 make_stock_chart(f"{pick}.NS", period, trigger=r.get("Trigger Price"),
                                  invalidation=r.get("Invalidation Level"))
-                st.markdown(f"#### Fundamentals "
+                # --- v2 Phase 2: pre-loaded fundamentals sub-scores (from CSV) ---
+                if r.get("Fundamentals") == "Loaded":
+                    gate = str(r.get("Fundamentals Quality Gate", "-"))
+                    gate_color = ("#1e7d32" if gate == "Pass"
+                                  else "#8b1e1e" if gate == "Fail" else "#555")
+                    st.markdown(f"#### Fundamentals &nbsp; "
+                                f"{badge('Quality Gate: ' + gate, gate_color)}",
+                                unsafe_allow_html=True)
+                    fcols = st.columns(4)
+                    metric_card(fcols[0], "Quality", r.get("Quality Score", "-"), "#1f4e79")
+                    metric_card(fcols[1], "Growth", r.get("Growth Score", "-"), "#1f4e79")
+                    metric_card(fcols[2], "Balance Sheet", r.get("Balance-Sheet Score", "-"),
+                                "#1f4e79", sub=("proxy" if r.get("BS Proxy") == "Yes" else ""))
+                    metric_card(fcols[3], "Promoter", r.get("Promoter Score", "-"), "#1f4e79")
+                    if int(r.get("Fundamentals Partial", 0) or 0) > 2:
+                        st.caption("Some fundamental fields were missing - scores are partial.")
+                elif r.get("Fundamentals") == "Missing":
+                    st.caption("No fundamentals row for this symbol in your CSV.")
+                st.markdown(f"#### Fundamentals (live) "
                             f"&nbsp;[Open on Screener.in &#128279;]({fundamentals.screener_url(pick)})")
                 with st.expander("Load key fundamentals from Screener.in", expanded=False):
                     if st.button("Fetch fundamentals", key=f"fund_{pick}"):
