@@ -449,10 +449,14 @@ with st.sidebar.expander("Fundamentals (optional)"):
     auto_yf = st.checkbox("Use Yahoo auto-fundamentals", value=False, key="auto_yf")
     if st.button("Fetch / refresh Yahoo fundamentals now", key="fetch_yf"):
         uni_tmp = load_universe(uploaded, NSE_FILES)
-        syms = (sorted(uni_tmp["symbol"].astype(str).str.upper().unique())
-                if not uni_tmp.empty else [])
+        syms = set(uni_tmp["symbol"].astype(str).str.upper().unique()) if not uni_tmp.empty else set()
+        # ALWAYS include holdings symbols so the portfolio gets a value assessment,
+        # even for stocks outside the scan universe.
+        if holdings_norm is not None and not holdings_norm.empty:
+            syms |= set(holdings_norm["symbol"].astype(str).str.upper().unique())
+        syms = sorted(syms)
         if not syms:
-            st.warning("No universe to fetch. Add a universe / NSE file first.")
+            st.warning("No universe / holdings to fetch. Add a universe or holdings file.")
         else:
             pbar = st.progress(0.0); ptxt = st.empty()
             def _fp(d, t, s): pbar.progress(d / t); ptxt.write(f"{d}/{t}: {s}")
@@ -901,7 +905,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
 
             sub = st.tabs(["Portfolio Summary", "In Momentum",
                            "Waiting for Confirmation", "Weak / Exit Review",
-                           "Do Not Chase", "Value Recovery", "Holding Deep Dive"])
+                           "Do Not Chase", "Value Assessment", "Holding Deep Dive"])
 
             # Action-label colours for the sub-tab tables.
             ACT_COLORS = {
@@ -1007,14 +1011,48 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                 show_h(holdings_df[holdings_df["holding_action"] == "Do Not Add / Trail Only"],
                        "No holdings currently overextended.")
 
-            # ---- F. Value Recovery (holdings appearing in value scanner) ----
+            # ---- F. Value Assessment (fundamentals quality-growth lens) ----
             with sub[5]:
-                st.info("Holdings that are also surfacing as Value Reversal Ready "
-                        "or Value Base Forming - potential recovery candidates.")
-                v_h = holdings_df[holdings_df.get("Value Classification", "").isin(
-                    ["Value Reversal Ready", "Value Base Forming"])] \
-                    if "Value Classification" in holdings_df.columns else pd.DataFrame()
-                show_h(v_h, "No holdings currently in value-recovery setups.")
+                st.caption("Each holding judged on the 3-5 year fundamentals lens "
+                           "(Value Class, Composite Value, Expected CAGR). Needs "
+                           "fundamentals - use the sidebar (Yahoo auto or Screener CSV) "
+                           "and re-run the scan.")
+                if "Value Class" not in holdings_df.columns or \
+                        holdings_df["Value Class"].fillna("").eq("").all():
+                    st.warning("No fundamentals attached to your holdings yet. In the "
+                               "sidebar: tick **Use Yahoo auto-fundamentals**, click "
+                               "**Fetch** (now includes your holdings), then **Run "
+                               "Scan**. Compounder status also needs the Screener CSV "
+                               "(governance fields).")
+                else:
+                    # Value-class breakdown of the portfolio
+                    vh = holdings_df.copy()
+                    vh["Value Class"] = vh["Value Class"].fillna("Fundamentals Missing")
+                    counts = vh["Value Class"].value_counts().reset_index()
+                    counts.columns = ["Value Class", "Holdings"]
+                    cc = st.columns(2)
+                    cc[0].plotly_chart(px.pie(counts, names="Value Class", values="Holdings",
+                                              hole=0.5, title="Holdings by Value Class"),
+                                       use_container_width=True)
+                    # Avg expected CAGR per held name (bar)
+                    if "Expected CAGR %" in vh.columns:
+                        cg = vh.dropna(subset=["Expected CAGR %"]).sort_values("Expected CAGR %")
+                        if not cg.empty:
+                            cc[1].plotly_chart(px.bar(cg.tail(15), x="Expected CAGR %",
+                                                      y="symbol", orientation="h",
+                                                      title="Holdings by Expected CAGR %",
+                                                      color="Expected CAGR %",
+                                                      color_continuous_scale="RdYlGn"),
+                                               use_container_width=True)
+                    st.divider()
+                    val_cols = ["symbol", "company", "quantity", "current_value",
+                                "pnl_pct", "Value Class", "Composite Value",
+                                "Expected CAGR %", "CAGR Band", "Quality Score",
+                                "Crossover Buy", "holding_action"]
+                    show_cols = [c for c in val_cols if c in vh.columns]
+                    st.subheader("Holdings - value assessment")
+                    st.dataframe(vh[show_cols], use_container_width=True, height=420,
+                                 hide_index=True)
 
             # ---- G. Holding Deep Dive (fragment-isolated) ----
             with sub[6]:
@@ -1049,6 +1087,16 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                         metric_card(dc2[2], "Sector Rank", r.get("Sector Rank", "-"), "#1f4e79")
                         metric_card(dc2[3], "Avg vs CMP %", r.get("avg_vs_cmp_pct", "-"), "#37474f")
                         metric_card(dc2[4], "CMP vs 200DMA %", r.get("cmp_vs_200dma_pct", "-"), "#37474f")
+                        # Value (fundamentals) lens, if attached
+                        if str(r.get("Value Class", "") or "") not in ("", "nan"):
+                            st.markdown(f"**Value lens:** {badge(str(r.get('Value Class')), '#1f4e79')}",
+                                        unsafe_allow_html=True)
+                            dv = st.columns(4)
+                            metric_card(dv[0], "Composite Value", r.get("Composite Value", "-"), "#1f4e79")
+                            metric_card(dv[1], "Expected CAGR %", r.get("Expected CAGR %", "-"), "#1e7d32")
+                            metric_card(dv[2], "Quality", r.get("Quality Score", "-"), "#1f4e79")
+                            metric_card(dv[3], "Crossover Buy", r.get("Crossover Buy", "-"),
+                                        "#0b6e2e" if r.get("Crossover Buy") == "Yes" else "#555")
                         st.write(f"Trigger: {r.get('Trigger Price', '-')} | "
                                  f"Invalidation/SL: {r.get('Invalidation Level', '-')} | "
                                  f"Confirmation: {r.get('Confirmation Needed', '-')}")
