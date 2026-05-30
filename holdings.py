@@ -142,6 +142,10 @@ SCAN_COLS = [
     "Distance from 20 DMA %", "200 DMA Slope %",
     "Overextended", "Coiled Ready", "Coiled Score",
     "Fresh Momentum", "Fresh Momentum Score",
+    # v2 Phase 4: value / quality-growth dual-lens columns
+    "Value Class", "Composite Value", "Expected CAGR %", "CAGR Band",
+    "Quality Score", "Crossover Buy", "Value Entry Style", "Accumulation Zone",
+    "Spring Ready", "Spring Score",
 ]
 
 ACTION_REMARKS = {
@@ -153,6 +157,11 @@ ACTION_REMARKS = {
     "Exit Review":          "Exit / reduce review. Avoid averaging down until structure improves.",
     "Watch Only":           "Watch only. Wait for reclaim of 50 DMA or base breakout.",
     "No Scanner Data":      "Scanner data unavailable for this symbol - see Failed Tickers.",
+    # v2 Phase 4 (Section 40) dual-lens actions
+    "Core Compounder - Hold / Add in Zones":
+        "Verified 3-5 yr compounder. Hold; add in the accumulation zone. Ignore short-term chart noise.",
+    "Fundamental + Technical Breakdown - Exit Review":
+        "Both lenses negative (weak business AND below falling 200 DMA, in loss). Exit / reduce review; do NOT average down.",
 }
 
 
@@ -186,6 +195,12 @@ def _action(r) -> str:
     above_200 = pd.notna(cmp_) and pd.notna(ma200) and cmp_ > ma200
     above_50 = pd.notna(cmp_) and pd.notna(ma50) and cmp_ > ma50
     falling_200 = slope200 <= 0
+    value_cls = str(r.get("Value Class", "") or "")
+
+    # v2 Section 40: dual-lens (value + technical) takes precedence on the extremes.
+    # Both lenses negative -> strongest exit signal.
+    if (value_cls == "Value Avoid" and pnl < 0 and (not above_200) and falling_200):
+        return "Fundamental + Technical Breakdown - Exit Review"
 
     # F. Exit Review (structure broken)
     if (not above_200) and falling_200 and (rs < 0 or comp < 55):
@@ -193,6 +208,9 @@ def _action(r) -> str:
     # E. Review / Reduce (weak but not collapsing)
     if cls == "Rejected" or comp < 55 or rs < 0:
         return "Review / Reduce"
+    # v2 Section 40: a verified compounder you already hold -> core long-term hold.
+    if value_cls == "Compounder" and not overext:
+        return "Core Compounder - Hold / Add in Zones"
     # D. Do Not Add / Trail Only (strong-but-overextended, already in profit)
     if overext and pnl > 0:
         return "Do Not Add / Trail Only"

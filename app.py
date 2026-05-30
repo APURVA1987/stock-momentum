@@ -775,7 +775,7 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
 
     # Name-keyed tabs (order can change without breaking the blocks below).
     # ---- Tab visibility driven by sidebar "Scan focus" ----
-    _ALL_TABS = ["My Holdings", "Market Overview", "Sector Rotation", "RS Leaders",
+    _ALL_TABS = ["My Holdings", "Crossover Buy", "Market Overview", "Sector Rotation", "RS Leaders",
                  "Strong Breakout", "Spring / Pre-Breakout", "Wait for Confirmation",
                  "Coiled / Ready", "Fresh Momentum", "Early Watchlist", "Do Not Chase",
                  "Momentum Map", "Value / Quality-Growth", "Technical Recovery",
@@ -850,7 +850,9 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                 "Hold / Trail": "#1e7d32", "Add on Pullback": "#0b6e2e",
                 "Hold, Set Alert": "#e08e0b", "Do Not Add / Trail Only": "#6a1b9a",
                 "Review / Reduce": "#b71c1c", "Exit Review": "#6e0b0b",
-                "Watch Only": "#1f4e79", "No Scanner Data": "#555"}
+                "Watch Only": "#1f4e79", "No Scanner Data": "#555",
+                "Core Compounder - Hold / Add in Zones": "#0b6e2e",
+                "Fundamental + Technical Breakdown - Exit Review": "#6e0b0b"}
 
             def style_holdings(df):
                 def row_style(row):
@@ -861,7 +863,8 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
             holding_cols = ["symbol", "company", "quantity", "avg_cost", "CMP", "ltp",
                             "invested", "current_value", "pnl", "pnl_pct",
                             "portfolio_weight_pct", "Classification", "Composite Score",
-                            "RS Score", "Sector", "Sector Status", "Breakout Status",
+                            "RS Score", "Value Class", "Composite Value", "Expected CAGR %",
+                            "Crossover Buy", "Sector", "Sector Status", "Breakout Status",
                             "Risk Level", "Trigger Price", "Invalidation Level",
                             "Confirmation Needed", "Pullback Type",
                             "avg_vs_cmp_pct", "avg_vs_200dma_pct", "cmp_vs_200dma_pct",
@@ -999,6 +1002,53 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                         st.error(f"Could not render Holding Deep Dive: {exc}. "
                                  "Try selecting a different holding.")
                 _holding_deep_dive()
+
+    # =====================================================================
+    # CROSSOVER BUY (v2 Phase 4 - the dual-scan jackpot, Section 38)
+    # =====================================================================
+    with T["Crossover Buy"]:
+        st.markdown("## Crossover Buy")
+        st.caption("A verified 15-20% CAGR business that is ALSO breaking out or "
+                   "coiling. Quality + timing align - the highest-priority list. "
+                   "Needs a fundamentals CSV.")
+        xb = result.get("crossover", pd.DataFrame())
+        if xb is None or xb.empty:
+            st.info("No Crossover Buy stocks. This needs fundamentals (sidebar CSV) "
+                    "AND a value Compounder / Quality-Growth that is simultaneously "
+                    "Spring-Ready or an Actionable/Elite momentum breakout. Empty is "
+                    "common - that is the point: it only fires on the best setups.")
+        else:
+            kc = st.columns(4)
+            metric_card(kc[0], "Crossover Buys", len(xb), "#0b6e2e")
+            metric_card(kc[1], "Avg Composite Value",
+                        f"{xb['Composite Value'].mean():.0f}", "#1e7d32")
+            metric_card(kc[2], "Avg Expected CAGR %",
+                        f"{xb['Expected CAGR %'].mean():.1f}", "#1e7d32")
+            top_sec = (xb["Sector"].mode().iloc[0]
+                       if not xb["Sector"].dropna().empty else "-")
+            metric_card(kc[3], "Top sector", top_sec, "#1f4e79")
+            st.write("")
+            stock_cards(xb, len(xb), "#0b6e2e", [
+                ("CMP", "CMP"), ("Comp Value", "Composite Value"),
+                ("CAGR %", "Expected CAGR %"), ("Class", "Value Class"),
+                ("Momentum", "Composite Score"), ("Spring", "Spring Ready"),
+                ("Entry", "Value Entry Style"), ("Zone", "Accumulation Zone")])
+            st.write("")
+            st.plotly_chart(px.scatter(
+                xb, x="Composite Value", y="Composite Score", size="Expected CAGR %",
+                color="Value Class", hover_name="Symbol",
+                hover_data=["Sector", "Expected CAGR %", "Value Entry Style"],
+                title="Crossover Buy: value (x) vs momentum (y), bubble = CAGR",
+                size_max=30), use_container_width=True)
+            st.divider()
+            xb_cols = ["Symbol", "Company", "Sector", "CMP", "Value Class",
+                       "Composite Value", "Expected CAGR %", "CAGR Band", "Composite Score",
+                       "Momentum Class", "Spring Ready", "Quality Score", "Value Entry Style",
+                       "Accumulation Zone", "Value Target 3-5Y", "Risk Level"]
+            summary_table(xb, key="xover_tbl", title="Crossover Buy stocks",
+                          caption="Quality business + technical timing. Still confirm "
+                                  "chart, news and liquidity before sizing.",
+                          detail_cols=xb_cols, default_sort="Composite Value")
 
     # =====================================================================
     # 1) MARKET OVERVIEW
