@@ -1674,7 +1674,8 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                                   use_container_width=True)
             st.divider()
             vq_cols = ["Symbol", "Company", "Sector", "CMP", "Value Class", "Value Tier",
-                       "Composite Value", "Expected CAGR %", "CAGR Band", "Quality Score",
+                       "Composite Value", "Expected CAGR %", "DCF CAGR %",
+                       "CAGR Confidence", "CAGR Divergence", "CAGR Band", "Quality Score",
                        "Growth Score", "Valuation Score", "Valuation Flag",
                        "Balance-Sheet Score", "Promoter Score", "Crossover Buy",
                        "Value Entry Style", "Accumulation Zone", "Value Target 3-5Y"]

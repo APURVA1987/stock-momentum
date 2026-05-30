@@ -345,6 +345,53 @@ def expected_cagr(f: dict, quality_score: float, sector: str = "",
 
 
 # -----------------------------------------------------------------------------
+# Section 45 (future->now): DCF-lite cross-check on Expected CAGR
+# -----------------------------------------------------------------------------
+def dcf_lite_cagr(f: dict, quality_score: float, sector: str = "",
+                  sector_pe_median: float = float("nan"), years: int = 4) -> dict:
+    """A SECOND, independent CAGR estimate using a simple forward earnings model.
+
+    Works entirely in P/E space (we have P/E + price, not absolute EPS):
+        E0  = P0 / pe                       (today's earnings per share, scaled)
+        E_n = E0 * (1+g)^n                  (grow earnings n years)
+        P_n = E_n * fair_pe                 (exit at the fair multiple)
+        price CAGR = (P_n/P0)^(1/n) - 1 = (1+g) * (fair_pe/pe)^(1/n) - 1
+    Then add the dividend yield. This COMPOUNDS the re-rating (vs the heuristic
+    Expected CAGR which spreads it linearly), so the two genuinely differ and
+    their gap is a confidence signal - not a second copy of the same number.
+    """
+    if not f:
+        return {"DCF CAGR %": float("nan"), "CAGR Confidence": "No Data",
+                "CAGR Divergence": float("nan")}
+    pe = _vf(f, "pe_ttm")
+    if math.isnan(pe) or pe <= 0:
+        return {"DCF CAGR %": float("nan"), "CAGR Confidence": "No PE",
+                "CAGR Divergence": float("nan")}
+    p3 = _vf(f, "pat_cagr_3y", 0); p5 = _vf(f, "pat_cagr_5y", 0); rv3 = _vf(f, "rev_cagr_3y", 0)
+    g_earn = _clamp(0.5 * p3 + 0.3 * p5 + 0.2 * rv3, 0, 30) / 100.0
+    qf = _clamp(_vf({"q": quality_score}, "q", 50) / 100.0, 0, 1)
+    g = g_earn * (0.6 + 0.4 * qf)                     # quality-haircut growth
+    fpe = fair_pe(f, sector, sector_pe_median)
+    rerate_factor = (fpe / pe) ** (1.0 / max(1, years))
+    dy = _vf(f, "div_yield", 0)
+    dy = 0.0 if math.isnan(dy) else dy
+    dcf = ((1 + g) * rerate_factor - 1) * 100 + dy
+    dcf = round(_clamp(dcf, -15, 40), 1)
+    return {"DCF CAGR %": dcf}
+
+
+def cagr_cross_check(expected_cagr: float, dcf_cagr: float) -> dict:
+    """Compare the heuristic Expected CAGR with the DCF-lite estimate.
+    Small gap = high confidence; large gap = the two models disagree."""
+    e, d = _f(expected_cagr, float("nan")), _f(dcf_cagr, float("nan"))
+    if math.isnan(e) or math.isnan(d):
+        return {"CAGR Divergence": float("nan"), "CAGR Confidence": "No Data"}
+    gap = abs(e - d)
+    conf = "High" if gap <= 3 else "Medium" if gap <= 6 else "Low"
+    return {"CAGR Divergence": round(e - d, 1), "CAGR Confidence": conf}
+
+
+# -----------------------------------------------------------------------------
 # Section 36: Composite Value Score
 # -----------------------------------------------------------------------------
 def composite_value(quality, growth, valuation, balance, promoter) -> float:

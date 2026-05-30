@@ -1549,6 +1549,11 @@ def run_scan(universe_df: pd.DataFrame, period: str = "5y",
                 cagr = V.expected_cagr(fdata, fsc.get("Quality Score"),
                                        s["sector"], sec_pe)
                 rowd.update(cagr)
+                # DCF-lite cross-check (Section 45): a second, independent estimate.
+                dcf = V.dcf_lite_cagr(fdata, fsc.get("Quality Score"), s["sector"], sec_pe)
+                rowd.update(dcf)
+                rowd.update(V.cagr_cross_check(cagr.get("Expected CAGR %"),
+                                               dcf.get("DCF CAGR %")))
                 comp_val = V.composite_value(fsc.get("Quality Score"), fsc.get("Growth Score"),
                                              vsc.get("Valuation Score"),
                                              fsc.get("Balance-Sheet Score"), fsc.get("Promoter Score"))
