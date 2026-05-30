@@ -667,3 +667,27 @@ snapshot of your fundamentals CSV every quarter after results season
 a value backtest can read the snapshot in force at each historical date T and
 measure 1-3 year forward returns without look-ahead. This is the only
 methodologically sound way and is listed in Section 45 future enhancements.
+
+---
+
+## 48. Auto-fundamentals from yfinance (free, cloud-safe)
+
+`fundamentals.fetch_fundamentals_yf(symbols, cache_path, ...)` builds the
+fundamentals dict directly from yfinance (`.info` + best-effort income/cashflow
+statements), mapped into the same canonical schema as the Screener CSV. Cached
+to `data/fundamentals_yf_cache.pkl` with a 7-day TTL; throttled; runs from a
+sidebar button (option A in the Fundamentals expander), not on every scan.
+
+**Covers:** ROE, operating margin, debt/equity, interest coverage, OCF/PAT,
+3Y revenue & PAT CAGR (from statements; falls back to yfinance YoY growth),
+P/E, P/B, PEG, dividend yield, market cap.
+
+**Does NOT cover (yfinance has no India governance data):** promoter holding,
+promoter pledge, promoter change 3Y, ROCE (TTM & 5Y), 5Y ROE, OPM trend.
+These stay missing -> the scorer marks them `partial`. Consequence: a
+yfinance-only stock typically has `Fundamentals Partial > 2`, so it CANNOT
+reach the Compounder gate (Section 32) on Yahoo data alone - but it DOES get
+a usable Quality Score (powers the Section 5A momentum gate), a Valuation
+Score, and an Expected CAGR estimate. For full Compounder classification,
+enrich with a Screener CSV (option B), which the loader merges OVER the Yahoo
+data (CSV wins on overlapping fields).

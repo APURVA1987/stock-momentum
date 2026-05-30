@@ -335,6 +335,163 @@ def score_fundamentals(f: dict, sector: str = "") -> dict:
     }
 
 
+# =============================================================================
+# AUTO-FUNDAMENTALS from yfinance (free, cloud-safe, cached)
+# =============================================================================
+# Pulls the ratio fields yfinance carries into our canonical schema. yfinance
+# does NOT have India-specific governance fields (promoter holding, pledge,
+# ROCE 5Y, OPM trend), so those stay missing and the scorer marks them partial.
+# This is enough to drive the Section 5A momentum quality gate and partial
+# Quality/Growth/Valuation scores, but full "Compounder" classification still
+# benefits from a Screener-enriched CSV.
+# -----------------------------------------------------------------------------
+import time
+import pickle
+
+try:
+    import yfinance as yf
+    _YF_OK = True
+except Exception:
+    _YF_OK = False
+
+
+def _pct(v, scale=100.0):
+    try:
+        return float(v) * scale if v is not None else float("nan")
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _cagr_from_row(series_vals):
+    """3Y CAGR from a list of annual values (newest first). Needs >=4 points."""
+    try:
+        vals = [float(x) for x in series_vals if x is not None and not pd.isna(x)]
+    except Exception:
+        return float("nan")
+    if len(vals) < 4 or vals[3] <= 0:
+        return float("nan")
+    return (((vals[0] / vals[3]) ** (1.0 / 3)) - 1.0) * 100.0
+
+
+def _row(df, *labels):
+    """Pull a statement row by trying several label variants; newest-first list."""
+    if df is None or getattr(df, "empty", True):
+        return None
+    for lab in labels:
+        if lab in df.index:
+            return list(df.loc[lab].values)
+    return None
+
+
+def fetch_one_yf(symbol: str, deep: bool = True) -> dict:
+    """Fundamentals for ONE symbol from yfinance. Returns {} on failure."""
+    if not _YF_OK:
+        return {}
+    sym = str(symbol).strip().upper()
+    try:
+        tk = yf.Ticker(f"{sym}.NS")
+        info = tk.info or {}
+    except Exception:
+        return {}
+    rec = {}
+    m = {
+        "roe_ttm": ("returnOnEquity", 100), "opm_ttm": ("operatingMargins", 100),
+        "pe_ttm": ("trailingPE", 1), "pb": ("priceToBook", 1),
+        "div_yield": ("dividendYield", 100), "mcap": ("marketCap", 1),
+        "rev_cagr_3y": ("revenueGrowth", 100),   # YoY proxy (flagged)
+        "pat_cagr_3y": ("earningsGrowth", 100),  # YoY proxy (flagged)
+    }
+    for canon, (key, scale) in m.items():
+        v = _pct(info.get(key), scale) if scale == 100 else info.get(key)
+        if v is not None and not (isinstance(v, float) and math.isnan(v)):
+            rec[canon] = float(v)
+    de = info.get("debtToEquity")          # yfinance gives this as a percent
+    if de is not None:
+        rec["debt_to_equity"] = float(de) / 100.0
+    peg = info.get("trailingPegRatio") or info.get("pegRatio")
+    if peg is not None:
+        rec["peg"] = float(peg)
+    # Deep: real multi-year CAGR + OCF/PAT + interest coverage from statements.
+    if deep:
+        try:
+            inc = tk.income_stmt
+            rev = _row(inc, "Total Revenue", "Operating Revenue")
+            pat = _row(inc, "Net Income", "Net Income Common Stockholders")
+            ebit = _row(inc, "EBIT", "Operating Income")
+            intexp = _row(inc, "Interest Expense", "Interest Expense Non Operating")
+            if rev:
+                c = _cagr_from_row(rev)
+                if not math.isnan(c):
+                    rec["rev_cagr_3y"] = round(c, 1)
+            if pat:
+                c = _cagr_from_row(pat)
+                if not math.isnan(c):
+                    rec["pat_cagr_3y"] = round(c, 1)
+            if ebit and intexp and intexp[0] not in (None, 0):
+                rec["interest_coverage"] = round(abs(float(ebit[0]) / float(intexp[0])), 2)
+            cf = tk.cashflow
+            ocf = _row(cf, "Operating Cash Flow", "Total Cash From Operating Activities")
+            if ocf and pat and pat[0] not in (None, 0):
+                rec["ocf_to_pat"] = round(float(ocf[0]) / float(pat[0]), 2)
+                rec["ocf_3y"] = round(sum(float(x) for x in ocf[:3] if x is not None), 0)
+        except Exception:
+            pass
+    return rec
+
+
+def load_yf_cache(cache_path: str) -> dict:
+    """Return the whole on-disk yfinance cache as {SYMBOL: {field: value}}."""
+    if not cache_path or not os.path.exists(cache_path):
+        return {}
+    try:
+        with open(cache_path, "rb") as fh:
+            cache = pickle.load(fh)
+        return {s: {k: v for k, v in rec.items() if k != "_ts"}
+                for s, rec in cache.items()}
+    except Exception:
+        return {}
+
+
+def fetch_fundamentals_yf(symbols, cache_path: str = None, max_age_days: int = 7,
+                          deep: bool = True, throttle: float = 0.25,
+                          progress=None) -> dict:
+    """Build {SYMBOL: {field: value}} from yfinance for many symbols, with an
+    on-disk cache (only refreshes entries older than `max_age_days`)."""
+    if not _YF_OK:
+        return {}
+    cache = {}
+    if cache_path and os.path.exists(cache_path):
+        try:
+            with open(cache_path, "rb") as fh:
+                cache = pickle.load(fh)
+        except Exception:
+            cache = {}
+    now = time.time()
+    fresh_cut = max_age_days * 86400
+    out, total = {}, len(symbols)
+    for i, sym in enumerate(symbols, start=1):
+        s = str(sym).strip().upper()
+        c = cache.get(s)
+        if c and (now - c.get("_ts", 0)) < fresh_cut:
+            out[s] = {k: v for k, v in c.items() if k != "_ts"}
+        else:
+            rec = fetch_one_yf(s, deep=deep)
+            if rec:
+                cache[s] = {**rec, "_ts": now}
+                out[s] = rec
+            if throttle:
+                time.sleep(throttle)
+        if progress:
+            progress(i, total, s)
+    if cache_path:
+        try:
+            with open(cache_path, "wb") as fh:
+                pickle.dump(cache, fh)
+        except Exception:
+            pass
+    return out
+
+
 def fundamentals_quality_gate(scores: dict, f: dict) -> bool:
     """Section 32: hard gate a stock must pass to be eligible for 'Compounder'."""
     if not scores or scores.get("Fundamentals Partial", 99) > 2:

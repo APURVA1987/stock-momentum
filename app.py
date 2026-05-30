@@ -424,11 +424,35 @@ if scanner._is_nse_market_hours_ist():
         st.sidebar.warning("Market is OPEN. Volume/breakout signals will be "
                            "understated because today's bar is partial.")
 # --- Fundamentals (v2 Phase 2): bulk CSV keyed by symbol -----------------------
-with st.sidebar.expander("Fundamentals CSV (optional)"):
-    st.caption("Upload a bulk CSV keyed by `symbol` with columns like ROCE, ROE, "
-               "Profit Growth 3Y, Sales Growth 3Y, Debt to Equity, Promoter "
-               "Holding, Pledge, P/E, PEG. Headers are auto-matched. Saved as the "
-               "default for next time.")
+FUND_YF_CACHE = os.path.join(DATA_DIR, "fundamentals_yf_cache.pkl")
+with st.sidebar.expander("Fundamentals (optional)"):
+    st.caption("Two ways to feed the Value scan:")
+    st.markdown("**A. Auto from Yahoo (free, cloud-safe)**")
+    st.caption("Builds fundamentals for the whole universe from yfinance. "
+               "Covers ROE / margins / D-E / growth / P/E / P/B / PEG. Missing: "
+               "promoter holding & pledge (Yahoo has no India governance data), so "
+               "scores are PARTIAL and full 'Compounder' status needs option B.")
+    auto_yf = st.checkbox("Use Yahoo auto-fundamentals", value=False, key="auto_yf")
+    if st.button("Fetch / refresh Yahoo fundamentals now", key="fetch_yf"):
+        uni_tmp = load_universe(uploaded, NSE_FILES)
+        syms = (sorted(uni_tmp["symbol"].astype(str).str.upper().unique())
+                if not uni_tmp.empty else [])
+        if not syms:
+            st.warning("No universe to fetch. Add a universe / NSE file first.")
+        else:
+            pbar = st.progress(0.0); ptxt = st.empty()
+            def _fp(d, t, s): pbar.progress(d / t); ptxt.write(f"{d}/{t}: {s}")
+            with st.spinner(f"Fetching Yahoo fundamentals for {len(syms)} stocks "
+                            "(cached; first run is slow) ..."):
+                got = fundamentals.fetch_fundamentals_yf(
+                    syms, cache_path=FUND_YF_CACHE, progress=_fp)
+            pbar.empty(); ptxt.empty()
+            st.session_state["fund_yf"] = got
+            st.success(f"Yahoo fundamentals ready for {len(got)} stocks.")
+    st.markdown("**B. Upload Screener CSV (most complete)**")
+    st.caption("Bulk CSV keyed by `symbol` (ROCE, ROE, Profit/Sales Growth, "
+               "Debt to Equity, Promoter Holding, Pledge, P/E, PEG). Headers "
+               "auto-matched. Overrides/complements option A.")
     ffile = st.file_uploader("Upload fundamentals.csv", type=["csv"], key="fund_csv")
     if ffile is not None and _save_default_upload(ffile, FUND_PATH):
         st.success("Saved as default -> fundamentals.csv")
@@ -437,11 +461,17 @@ with st.sidebar.expander("Fundamentals CSV (optional)"):
 momentum_quality_gate = st.sidebar.checkbox(
     "Momentum quality gate (demote weak-fundamental breakouts)", value=False,
     help="Section 5A. When ON, a Strong Breakout in a business with Quality "
-         "Score < 40 is demoted to Wait for Confirmation. Needs a fundamentals "
-         "CSV. Default OFF preserves pure-technical behaviour.")
-# Load the bulk fundamentals once (cheap CSV read, no per-stock network call).
-fundamentals_data = (fundamentals.load_fundamentals(FUND_PATH)
-                     if os.path.exists(FUND_PATH) else {})
+         "Score < 40 is demoted to Wait for Confirmation. Needs fundamentals.")
+# Build the fundamentals dict: CSV (option B) merged over Yahoo (option A).
+fundamentals_data = {}
+if st.session_state.get("auto_yf"):
+    fundamentals_data.update(st.session_state.get("fund_yf") or {})
+    if not fundamentals_data:
+        fundamentals_data.update(fundamentals.load_yf_cache(FUND_YF_CACHE))
+if os.path.exists(FUND_PATH):
+    csv_fund = fundamentals.load_fundamentals(FUND_PATH)
+    for sym, rec in csv_fund.items():           # CSV wins on overlap
+        fundamentals_data[sym] = {**fundamentals_data.get(sym, {}), **rec}
 if fundamentals_data:
     st.sidebar.caption(f"Fundamentals loaded for {len(fundamentals_data)} symbols.")
 
