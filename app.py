@@ -1148,9 +1148,10 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                                    orientation="h", title="Top early setups by score",
                                    color="Score", color_continuous_scale="Blues"),
                             use_container_width=True)
-            st.subheader(f"All Early-Watchlist stocks ({len(watch)})")
-            st.dataframe(watch, use_container_width=False, height=520,
-                         column_config=SCREENER_COLCFG)
+            st.divider()
+            summary_table(watch, key="watch_tbl", title="Early-Watchlist stocks",
+                          caption="Momentum developing but not ready. Observe only.",
+                          detail_cols=list(watch.columns), default_sort="Score")
 
     # =====================================================================
     # SECTOR ROTATION (percentile-ranked sector strength engine)
@@ -1315,17 +1316,30 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                 st.success("No overextended stocks right now.")
             else:
                 nc = nc.sort_values("Composite Score", ascending=False)
+                # Summary cards
+                dc = st.columns(4)
+                metric_card(dc[0], "Overextended", len(nc), "#6a1b9a")
+                metric_card(dc[1], "Avg Composite", f"{nc['Composite Score'].mean():.0f}", "#37474f")
+                metric_card(dc[2], "Avg Dist 20 DMA %",
+                            f"{nc['Distance from 20 DMA %'].mean():.1f}", "#e08e0b")
+                top_sec = (nc["Sector"].mode().iloc[0]
+                           if not nc["Sector"].dropna().empty else "-")
+                metric_card(dc[3], "Top sector", top_sec, "#1f4e79")
+                st.write("")
                 st.plotly_chart(px.scatter(
                     nc, x="Distance from 20 DMA %", y="Distance from 200 DMA %",
                     size="Composite Score", color="Classification", color_discrete_map=CLASS_COLORS,
                     hover_name="Symbol", title="How extended? (further right/up = more stretched)",
                     size_max=26), use_container_width=True)
+                st.divider()
                 nc_cols = ["Symbol", "Company", "Sector", "Classification", "CMP",
                            "Distance from 20 DMA %", "Distance from 50 DMA %",
                            "Distance from 200 DMA %", "RSI 14", "Gap Up %", "Risk Reward",
                            "No Chase Reason", "Wait Condition", "Composite Score"]
-                st.dataframe(nc[[c for c in nc_cols if c in nc.columns]],
-                             use_container_width=True, height=440)
+                summary_table(nc, key="nochase_tbl", title="Overextended stocks",
+                              caption="Good stocks, late entry. Hold/trail only; "
+                                      "wait for the suggested condition before adding.",
+                              detail_cols=nc_cols)
 
     # =====================================================================
     # COILED / READY (range contraction before a breakout)
@@ -1339,6 +1353,16 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         else:
             cdf = coiled.copy()
             cdf["Distance to Trigger %"] = ((cdf["Trigger Price"] / cdf["CMP"] - 1) * 100).round(2)
+            # Summary cards
+            kc = st.columns(4)
+            metric_card(kc[0], "Coiled setups", len(cdf), "#6a1b9a")
+            metric_card(kc[1], "Avg Coiled Score", f"{cdf['Coiled Score'].mean():.0f}", "#37474f")
+            nearest = cdf.sort_values("Distance to Trigger %").iloc[0]
+            metric_card(kc[2], "Closest to trigger", nearest["Symbol"], "#1e7d32",
+                        sub=f"{nearest['Distance to Trigger %']}% away")
+            metric_card(kc[3], "Tightest ATR contr.",
+                        f"{cdf['ATR Contraction'].min():.2f}", "#1f4e79")
+            st.write("")
             stock_cards(cdf, min(20, len(cdf)), "#6a1b9a", [
                 ("CMP", "CMP"), ("Coiled", "Coiled Score"), ("RS", "RS Score"),
                 ("ATR Contr", "ATR Contraction"), ("Vol Dryup", "Volume Dryup 10D"),
@@ -1354,10 +1378,13 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                                       title="Closest to breakout trigger",
                                       color="Distance to Trigger %",
                                       color_continuous_scale="Purples_r"), use_container_width=True)
+            st.divider()
             ccols = ["Symbol", "Company", "Sector", "CMP", "Coiled Score", "ATR Contraction",
                      "Volume Dryup 10D", "Range 10D %", "Distance from 52W High %",
                      "Trigger Price", "Distance to Trigger %", "RS Score", "Risk Level"]
-            df_with_links(cdf, ccols, height=420)
+            summary_table(cdf, key="coiled_tbl", title="Coiled / Ready stocks",
+                          caption="Spring-loaded setups. Wait for a breakout with volume.",
+                          detail_cols=ccols, default_sort="Coiled Score")
 
     # =====================================================================
     # FRESH MOMENTUM (new ignition, may have skipped the 200 DMA retest)
@@ -1369,6 +1396,16 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         if fresh is None or fresh.empty:
             st.info("No fresh momentum candidates with current settings.")
         else:
+            # Summary cards
+            fc = st.columns(4)
+            metric_card(fc[0], "Fresh candidates", len(fresh), "#00897b")
+            metric_card(fc[1], "Avg Fresh Score",
+                        f"{fresh['Fresh Momentum Score'].mean():.0f}", "#37474f")
+            metric_card(fc[2], "Avg Vol Ratio", f"{fresh['Volume Ratio'].mean():.2f}", "#37474f")
+            top_sec = (fresh["Sector"].mode().iloc[0]
+                       if not fresh["Sector"].dropna().empty else "-")
+            metric_card(fc[3], "Top sector", top_sec, "#1f4e79")
+            st.write("")
             stock_cards(fresh, min(20, len(fresh)), "#00897b", [
                 ("CMP", "CMP"), ("Fresh", "Fresh Momentum Score"), ("RSI", "RSI 14"),
                 ("ADX", "ADX 14"), ("Vol", "Volume Ratio"), ("20D High", "20D High"),
@@ -1379,9 +1416,13 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                                    title="Top fresh momentum candidates",
                                    color="Fresh Momentum Score", color_continuous_scale="Teal"),
                             use_container_width=True)
+            st.divider()
             fcols = ["Symbol", "Company", "Sector", "CMP", "Fresh Momentum Score", "RSI 14",
                      "ADX 14", "Volume Ratio", "20D High", "RS Score", "Composite Score", "Risk Level"]
-            df_with_links(fresh, fcols, height=420)
+            summary_table(fresh, key="fresh_tbl", title="Fresh momentum stocks",
+                          caption="New ignition. Prefer entry on a small pullback or "
+                                  "breakout sustain.",
+                          detail_cols=fcols, default_sort="Fresh Momentum Score")
 
     # =====================================================================
     # 6) MOMENTUM MAP
@@ -1464,12 +1505,12 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                             "Volume Ratio", "Relative Strength %", "Sector Status",
                             "Risk Level", "Value Remark"]
 
-            def vshow(df, msg):
+            def vshow(df, msg, key, title):
                 if df is None or df.empty:
                     st.info(msg); return
-                cols = [c for c in VAL_TBL_COLS if c in df.columns]
-                st.dataframe(df[cols], use_container_width=False, height=440,
-                             column_config=SCREENER_COLCFG)
+                summary_table(df, key=key, title=title,
+                              caption="Compact view first; open the expander for all columns.",
+                              detail_cols=VAL_TBL_COLS, default_sort="Value Score")
 
             # --- Summary ---
             with vsub[0]:
@@ -1507,7 +1548,9 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                                            title="Value Reversal Ready - ranking",
                                            color="Value Score", color_continuous_scale="Greens"),
                                     use_container_width=True)
-                vshow(val_reversal, "No Value Reversal Ready candidates.")
+                st.divider()
+                vshow(val_reversal, "No Value Reversal Ready candidates.",
+                      "val_rev_tbl", "Value Reversal Ready stocks")
             # --- Base Forming ---
             with vsub[2]:
                 st.info("Base forming. Set alert above the base resistance / trigger price.")
@@ -1522,15 +1565,19 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
                                            title="Closest to base-breakout trigger",
                                            color_discrete_sequence=["#1f4e79"]),
                                     use_container_width=True)
-                vshow(val_base, "No Value Base Forming candidates.")
+                st.divider()
+                vshow(val_base, "No Value Base Forming candidates.",
+                      "val_base_tbl", "Value Base Forming stocks")
             # --- Deep Value High Risk ---
             with vsub[3]:
                 st.warning("High-risk recovery candidates. Use as a small watchlist only.")
-                vshow(val_deep, "No Deep Value (high-risk) candidates.")
+                vshow(val_deep, "No Deep Value (high-risk) candidates.",
+                      "val_deep_tbl", "Deep Value (High Risk) stocks")
             # --- Value Trap Avoid ---
             with vsub[4]:
                 st.error("Cheap but technically weak. Avoid until structure improves.")
-                vshow(val_trap, "No Value Trap names.")
+                vshow(val_trap, "No Value Trap names.",
+                      "val_trap_tbl", "Value Trap (Avoid) stocks")
             # --- Value Deep Dive (fragment-isolated) ---
             with vsub[5]:
                 @_fragment
@@ -1726,17 +1773,29 @@ if "result" in st.session_state and "strong" in st.session_state["result"]:
         if rejected is not None and not rejected.empty and "Reason" in rejected:
             rc = rejected["Reason"].value_counts().reset_index()
             rc.columns = ["Reason", "Count"]
+            # Summary cards
+            jc = st.columns(3)
+            metric_card(jc[0], "Rejected", len(rejected), "#8b1e1e")
+            metric_card(jc[1], "Failed tickers", len(failed), "#555")
+            metric_card(jc[2], "Top reason", rc.iloc[0]["Reason"], "#6e0b0b",
+                        sub=f"{int(rc.iloc[0]['Count'])} stocks")
+            st.write("")
             st.plotly_chart(px.bar(rc, x="Count", y="Reason", orientation="h",
                                    title="Why stocks were rejected",
                                    color_discrete_sequence=["#8b1e1e"]), use_container_width=True)
-            with st.expander("Rejected table"):
-                st.dataframe(rejected, use_container_width=False, height=400,
-                             column_config=SCREENER_COLCFG)
+            st.divider()
+            summary_table(rejected, key="rejected_tbl", title="Rejected stocks",
+                          caption="Stocks that failed a hard gate or scored below the "
+                                  "minimum. Use the filters to find a specific name.",
+                          detail_cols=list(rejected.columns))
         else:
             st.info("No rejected stocks.")
         st.subheader("Failed tickers (download error / no data)")
+        st.caption("These symbols returned no usable Yahoo data - usually a renamed "
+                   "or delisted ticker.")
         if failed:
-            st.dataframe(pd.DataFrame({"Failed Tickers": failed}), use_container_width=True, height=240)
+            st.dataframe(pd.DataFrame({"Failed Tickers": failed}),
+                         use_container_width=True, height=240, hide_index=True)
         else:
             st.success("No failed tickers.")
 

@@ -10,6 +10,37 @@
 
 ---
 
+## 0. Dashboard UI Flow Improvements (latest)
+
+The dashboard was refactored from "Excel-like wide tables on top" into a
+graphical command-centre layout. Key changes a future agent must preserve:
+
+- **`summary_table(df, key, title, caption, detail_cols, default_sort)`** is the
+  standard table renderer (defined near the top of `app.py`). It always emits,
+  in this order: **heading -> caption -> filter row -> compact <=11-col table ->
+  expander with the full wide table**. Never place a title BELOW a table; use
+  this helper. It is used by Strong Breakout, Wait, Early Watchlist, Sector
+  Rotation drill-down, RS Leaders, Do Not Chase, Coiled, Fresh, the four Value
+  sub-tabs and Rejected (10+ call sites).
+- **Filters live in `st.session_state`** (keyed by the `key` arg): search box,
+  Classification dropdown, Sort-by, and Rows (10/20/50/All). Changing a filter
+  reruns only the render - it never re-runs the scan.
+- **Graphical-first pattern** for every table-heavy tab: (1) summary metric
+  cards, (2) main chart, (3) secondary chart, (4) top-N stock cards,
+  (5) compact table, (6) detailed table inside the expander.
+- **Sector Rotation** has a fragment-isolated sector selector
+  (`@_fragment`) backed by `st.session_state["sector_pick"]`; changing the
+  sector updates the per-sector cards / classification donut / top-10 chart /
+  momentum scatter / stock table WITHOUT leaving the tab or re-scanning.
+  Missing sectors are coerced to "Unknown".
+- **Deep Dives** (Stock / Holding / Value) are each wrapped in `@_fragment`
+  so changing the selected stock updates in place (no scroll-to-top, no eject).
+- Wide tables use `use_container_width=False` + `column_config` so the Symbol
+  column never collapses to "AL"; horizontal scroll is confined to the
+  expander's detailed table, not the main view.
+
+---
+
 ## 1. Project Overview
 
 This is a **local Python + Streamlit dashboard** for NSE (Indian) stock
